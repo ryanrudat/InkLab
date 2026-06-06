@@ -16,7 +16,6 @@ final class ObjectOverlayView: UIView {
         return hit === self ? nil : hit
     }
 
-    /// Reconcile host views from a page projection diff (the InkLabCanvasCore output).
     func apply(_ ops: [ViewOp], page: PageProjection) {
         for op in ops {
             switch op {
@@ -35,7 +34,6 @@ final class ObjectOverlayView: UIView {
                 hosts[id] = nil
             }
         }
-        // z-order from the model's FractionalIndex.
         let ordered = hosts.values.sorted {
             (page.objects[$0.objectID]?.z ?? FractionalIndex("m")) < (page.objects[$1.objectID]?.z ?? FractionalIndex("m"))
         }
@@ -43,8 +41,6 @@ final class ObjectOverlayView: UIView {
     }
 }
 
-/// One host view per object. Positioned by the model's scalar Transform; finger-draggable, baking the
-/// new position back into the journal on release.
 final class ObjectHostView: UIView {
     let objectID: UUID
     var onMoved: ((UUID, Transform) -> Void)?
@@ -63,8 +59,8 @@ final class ObjectHostView: UIView {
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleDrag(_:)))
@@ -88,6 +84,13 @@ final class ObjectHostView: UIView {
             backgroundColor = .secondarySystemBackground
             label.textColor = .label
             label.text = "Read as: \(body.readAs)"
+        case .callout(let text, _, _):
+            backgroundColor = UIColor.systemBlue.withAlphaComponent(0.12)
+            layer.borderColor = UIColor.systemBlue.withAlphaComponent(0.4).cgColor
+            layer.borderWidth = 1
+            label.textColor = .label
+            label.font = .systemFont(ofSize: 16, weight: .medium)
+            label.text = text
         default:
             backgroundColor = .secondarySystemBackground
             label.textColor = .label
