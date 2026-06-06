@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+DerivedData/
+build/
+*.moved-aside
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Node (the Server/ proxy runs TypeScript directly; node_modules only if deps are added)
+node_modules/
+
+# Backups (git history is the real backup)
+*.pbxproj.bak
+
+# Secrets — never commit API keys or signing material
+*.p8
+*.p12
+*.mobileprovision
+Secrets.xcconfig
+.env

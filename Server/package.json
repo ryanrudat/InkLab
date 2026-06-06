@@ -1,0 +1,12 @@
+{
+  "name": "inklab-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "InkLab backend proxy — the server-side boundary for all Anthropic calls (ADR 0002).",
+  "engines": { "node": ">=23.6" },
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/server.ts"
+  }
+}
