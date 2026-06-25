@@ -63,6 +63,9 @@ public func balance(_ equation: String) -> BalanceResult {
         return .cannotBalance(basis.isEmpty ? "this equation has no balance (an element isn't conserved)"
                                             : "this equation is underdetermined (multiple independent balances)")
     }
+    if basis[0].contains(where: { $0.isOverflow }) {
+        return .cannotBalance("coefficients too large to solve exactly")
+    }
     guard let coeffs = smallestPositiveIntegers(basis[0]) else {
         return .cannotBalance("no all-positive integer coefficients exist")
     }
@@ -106,9 +109,24 @@ func nullSpace(_ m: inout [[Frac]], columns: Int) -> [[Frac]] {
 /// Scale a rational null-space vector to the smallest all-positive integer vector, or nil if no
 /// such vector exists (mixed signs, or a zero coefficient on a real species).
 func smallestPositiveIntegers(_ v: [Frac]) -> [Int]? {
-    let denomLCM = v.reduce(1) { lcm($0, $1.d) }
-    var ints = v.map { $0.n * (denomLCM / $0.d) }
-    if ints.allSatisfy({ $0 <= 0 }) { ints = ints.map { -$0 } }   // flip an all-negative solution
+    if v.contains(where: { $0.isOverflow }) { return nil }
+    // LCM of denominators, checked.
+    var denomLCM = 1
+    for f in v {
+        guard let l = lcm(denomLCM, f.d) else { return nil }
+        denomLCM = l
+    }
+    // Scale each entry to an integer, checked (n * denomLCM/d).
+    var ints = [Int]()
+    for f in v {
+        let (p, o) = f.n.multipliedReportingOverflow(by: denomLCM / f.d)
+        if o { return nil }
+        ints.append(p)
+    }
+    if ints.allSatisfy({ $0 <= 0 }) {                              // flip an all-negative solution
+        if ints.contains(Int.min) { return nil }
+        ints = ints.map { -$0 }
+    }
     guard ints.allSatisfy({ $0 > 0 }) else { return nil }         // any non-positive => invalid balance
     let g = ints.reduce(0) { Frac.gcd($0, abs($1)) }
     return g > 1 ? ints.map { $0 / g } : ints

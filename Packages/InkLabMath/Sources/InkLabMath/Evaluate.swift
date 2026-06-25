@@ -1,11 +1,19 @@
 import Foundation
 
 /// Numerically evaluate an `Expr` given variable values. Returns nil when a variable is missing or
-/// the expression isn't defined there (division by zero, ln of a non-positive, …).
+/// the expression isn't defined there (division by zero, ln of a non-positive, a negative base to a
+/// fractional power, …). The result is ALWAYS finite-or-nil: any sub-result that is NaN or ±Infinity
+/// collapses to nil and propagates up, so undefined math is reported as `.undefined`/nil — never a
+/// non-nil NaN that downstream code (ReactiveGraph, MultiRep curve-fit) would treat as a real value.
 public func numericValue(_ e: Expr, _ env: [String: Double]) -> Double? {
-    func nv(_ x: Expr) -> Double? { numericValue(x, env) }
+    guard let v = _numericValue(e, env) else { return nil }
+    return v.isFinite ? v : nil
+}
+
+private func _numericValue(_ e: Expr, _ env: [String: Double]) -> Double? {
+    func nv(_ x: Expr) -> Double? { numericValue(x, env) }   // recurse via the finite-clamping wrapper
     switch e {
-    case .num(let r): return Double(r.num) / Double(r.den)
+    case .num(let r): return r.isOverflow ? nil : Double(r.num) / Double(r.den)
     case .variable(let v): return env[v]
     case .neg(let a): return nv(a).map { -$0 }
     case .add(let a, let b): if let x = nv(a), let y = nv(b) { return x + y }; return nil

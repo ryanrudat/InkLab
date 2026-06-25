@@ -16,6 +16,18 @@ final class ReactiveTests: XCTestCase {
         XCTAssertEqual(values(g)?["c"], 5)
     }
 
+    /// Regression: a mathematically-undefined cell must report `.undefined`, NOT `.success` with a NaN.
+    /// (numericValue used to return a non-nil NaN for (-2)^0.5, which passed the guard and silently
+    /// poisoned the whole sheet.)
+    func test_undefinedResultDoesNotSucceedWithNaN() throws {
+        let g = ReactiveGraph()
+        g.setInput("x", -2)
+        try g.setFormula("y", "x^0.5")          // (-2)^0.5 is undefined over the reals
+        if case .failure = g.evaluate() {} else { XCTFail("undefined math must be .failure, not .success(NaN)") }
+        // And a downstream cell isn't silently filled with NaN.
+        XCTAssertNil(values(g)?["y"])
+    }
+
     func test_changingAKnobUpdatesDownstream() throws {
         let g = ReactiveGraph()
         g.setInput("a", 2)

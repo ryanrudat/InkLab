@@ -105,6 +105,7 @@ private func continuationCheck(prev start: RationalFunction, forms: [LineForm], 
         }
         let rf = canonicalize(cur)
         guard rf.isWellDefined else { return .unsupported(line: i + 1, reason: "undefined (division by zero?)") }
+        if prev.isOverflow || rf.isOverflow { return .unsupported(line: i + 1, reason: "numbers too large to verify exactly") }
         if !prev.equals(rf) {
             if hasOpaque(prev) || hasOpaque(rf) {
                 return .unsupported(line: i + 1, reason: "contains functions/radicals I can't verify yet")
@@ -135,6 +136,7 @@ private func checkDerivative(_ inner: Expr, _ v: String, _ rhsSameLine: Expr?, _
     }
     let derivative = canonicalize(differentiate(inner, v)), ans = canonicalize(answer)
     guard derivative.isWellDefined, ans.isWellDefined else { return .unsupported(line: answerLine, reason: "undefined") }
+    if derivative.isOverflow || ans.isOverflow { return .unsupported(line: answerLine, reason: "numbers too large to verify exactly") }
     if !derivative.equals(ans) {
         if hasOpaque(derivative) || hasOpaque(ans) { return .unsupported(line: answerLine, reason: "contains functions I can't differentiate yet") }
         return .firstError(line: answerLine, kind: .notEqual,
@@ -159,6 +161,7 @@ private func checkIntegral(_ integrand: Expr, _ v: String, _ ansSameLine: Expr?,
     }
     let dAnswer = canonicalize(differentiate(answer, v)), f = canonicalize(integrand)
     guard dAnswer.isWellDefined, f.isWellDefined else { return .unsupported(line: answerLine, reason: "undefined") }
+    if dAnswer.isOverflow || f.isOverflow { return .unsupported(line: answerLine, reason: "numbers too large to verify exactly") }
     if !dAnswer.equals(f) {
         if hasOpaque(dAnswer) || hasOpaque(f) { return .unsupported(line: answerLine, reason: "contains functions I can't integrate yet") }
         return .firstError(line: answerLine, kind: .notEqual,
@@ -189,6 +192,7 @@ private func checkEquationChain(_ forms: [LineForm]) -> TutorVerdict {
         let cur = diff(forms[i], i + 1)
         if let fail = cur.fail { return fail }
         let curPoly = cur.poly!
+        if prevPoly.isOverflow || curPoly.isOverflow { return .unsupported(line: i + 1, reason: "numbers too large to verify exactly") }
         if prevPoly.proportionalConstant(to: curPoly) == nil {
             if hasOpaque(prevPoly) || hasOpaque(curPoly) {
                 return .unsupported(line: i + 1, reason: "contains functions/radicals I can't verify yet")
@@ -250,6 +254,10 @@ private func equationCounterexample(_ prev: Polynomial, _ cur: Polynomial) -> St
 // MARK: - Convenience for tests / engines
 
 /// Exact equivalence of two expression strings (true mathematical equality, not string match).
+/// Throws `ParseError.numberTooLarge` if either side overflows exact arithmetic, so callers degrade
+/// (try?/catch) rather than receiving a wrong answer.
 public func areEquivalent(_ a: String, _ b: String) throws -> Bool {
-    canonicalize(try parseExpr(a)).equals(canonicalize(try parseExpr(b)))
+    let ca = canonicalize(try parseExpr(a)), cb = canonicalize(try parseExpr(b))
+    if ca.isOverflow || cb.isOverflow { throw ParseError.numberTooLarge }
+    return ca.equals(cb)
 }

@@ -8,6 +8,18 @@
 
 /* Begin PBXBuildFile section */
 		A100000000000000000000B3 /* InkLabKit in Frameworks */ = {isa = PBXBuildFile; productRef = A100000000000000000000B2 /* InkLabKit */; };
+		D0CE00000000000000000013 /* InkLabRecognition in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000012 /* InkLabRecognition */; };
+		D0CE00000000000000000023 /* InkLabDoc in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000022 /* InkLabDoc */; };
+		D0CE00000000000000000033 /* InkLabCanvasCore in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000032 /* InkLabCanvasCore */; };
+		D0CE00000000000000000043 /* InkLabMath in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000042 /* InkLabMath */; };
+		D0CE00000000000000000053 /* InkLabUnits in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000052 /* InkLabUnits */; };
+		D0CE00000000000000000063 /* InkLabChem in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000062 /* InkLabChem */; };
+		D0CE00000000000000000073 /* InkLabBio in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000072 /* InkLabBio */; };
+		D0CE00000000000000000083 /* InkLabReactive in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000082 /* InkLabReactive */; };
+		D0CE00000000000000000093 /* InkLabFit in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000092 /* InkLabFit */; };
+		D0CE00000000000000000103 /* InkLabMultiRep in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000102 /* InkLabMultiRep */; };
+		D0CE00000000000000000113 /* InkLabRouter in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000112 /* InkLabRouter */; };
+		D0CE00000000000000000123 /* InkLabSearch in Frameworks */ = {isa = PBXBuildFile; productRef = D0CE00000000000000000122 /* InkLabSearch */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +69,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				A100000000000000000000B3 /* InkLabKit in Frameworks */,
+				D0CE00000000000000000013 /* InkLabRecognition in Frameworks */,
+				D0CE00000000000000000023 /* InkLabDoc in Frameworks */,
+				D0CE00000000000000000033 /* InkLabCanvasCore in Frameworks */,
+				D0CE00000000000000000043 /* InkLabMath in Frameworks */,
+				D0CE00000000000000000053 /* InkLabUnits in Frameworks */,
+				D0CE00000000000000000063 /* InkLabChem in Frameworks */,
+				D0CE00000000000000000073 /* InkLabBio in Frameworks */,
+				D0CE00000000000000000083 /* InkLabReactive in Frameworks */,
+				D0CE00000000000000000093 /* InkLabFit in Frameworks */,
+				D0CE00000000000000000103 /* InkLabMultiRep in Frameworks */,
+				D0CE00000000000000000113 /* InkLabRouter in Frameworks */,
+				D0CE00000000000000000123 /* InkLabSearch in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +142,18 @@
 			name = InkLab;
 			packageProductDependencies = (
 				A100000000000000000000B2 /* InkLabKit */,
+				D0CE00000000000000000012 /* InkLabRecognition */,
+				D0CE00000000000000000022 /* InkLabDoc */,
+				D0CE00000000000000000032 /* InkLabCanvasCore */,
+				D0CE00000000000000000042 /* InkLabMath */,
+				D0CE00000000000000000052 /* InkLabUnits */,
+				D0CE00000000000000000062 /* InkLabChem */,
+				D0CE00000000000000000072 /* InkLabBio */,
+				D0CE00000000000000000082 /* InkLabReactive */,
+				D0CE00000000000000000092 /* InkLabFit */,
+				D0CE00000000000000000102 /* InkLabMultiRep */,
+				D0CE00000000000000000112 /* InkLabRouter */,
+				D0CE00000000000000000122 /* InkLabSearch */,
 			);
 			productName = InkLab;
 			productReference = 7E6E80682FD3ADB200E7C58C /* InkLab.app */;
@@ -203,6 +239,18 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A100000000000000000000B1 /* XCLocalSwiftPackageReference "../Packages/InkLabKit" */,
+				D0CE00000000000000000011 /* XCLocalSwiftPackageReference "../Packages/InkLabRecognition" */,
+				D0CE00000000000000000021 /* XCLocalSwiftPackageReference "../Packages/InkLabDoc" */,
+				D0CE00000000000000000031 /* XCLocalSwiftPackageReference "../Packages/InkLabCanvasCore" */,
+				D0CE00000000000000000041 /* XCLocalSwiftPackageReference "../Packages/InkLabMath" */,
+				D0CE00000000000000000051 /* XCLocalSwiftPackageReference "../Packages/InkLabUnits" */,
+				D0CE00000000000000000061 /* XCLocalSwiftPackageReference "../Packages/InkLabChem" */,
+				D0CE00000000000000000071 /* XCLocalSwiftPackageReference "../Packages/InkLabBio" */,
+				D0CE00000000000000000081 /* XCLocalSwiftPackageReference "../Packages/InkLabReactive" */,
+				D0CE00000000000000000091 /* XCLocalSwiftPackageReference "../Packages/InkLabFit" */,
+				D0CE00000000000000000101 /* XCLocalSwiftPackageReference "../Packages/InkLabMultiRep" */,
+				D0CE00000000000000000111 /* XCLocalSwiftPackageReference "../Packages/InkLabRouter" */,
+				D0CE00000000000000000121 /* XCLocalSwiftPackageReference "../Packages/InkLabSearch" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 7E6E80692FD3ADB200E7C58C /* Products */;
@@ -331,7 +379,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -389,7 +437,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -409,6 +457,7 @@
 				DEVELOPMENT_TEAM = 65ZCZ462VW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -441,6 +490,7 @@
 				DEVELOPMENT_TEAM = 65ZCZ462VW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -471,7 +521,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 65ZCZ462VW;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ryanrudat.InkLabTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -493,7 +543,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 65ZCZ462VW;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.4;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ryanrudat.InkLabTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -593,12 +643,108 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/InkLabKit;
 		};
+		D0CE00000000000000000011 /* XCLocalSwiftPackageReference "../Packages/InkLabRecognition" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabRecognition;
+		};
+		D0CE00000000000000000021 /* XCLocalSwiftPackageReference "../Packages/InkLabDoc" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabDoc;
+		};
+		D0CE00000000000000000031 /* XCLocalSwiftPackageReference "../Packages/InkLabCanvasCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabCanvasCore;
+		};
+		D0CE00000000000000000041 /* XCLocalSwiftPackageReference "../Packages/InkLabMath" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabMath;
+		};
+		D0CE00000000000000000051 /* XCLocalSwiftPackageReference "../Packages/InkLabUnits" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabUnits;
+		};
+		D0CE00000000000000000061 /* XCLocalSwiftPackageReference "../Packages/InkLabChem" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabChem;
+		};
+		D0CE00000000000000000071 /* XCLocalSwiftPackageReference "../Packages/InkLabBio" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabBio;
+		};
+		D0CE00000000000000000081 /* XCLocalSwiftPackageReference "../Packages/InkLabReactive" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabReactive;
+		};
+		D0CE00000000000000000091 /* XCLocalSwiftPackageReference "../Packages/InkLabFit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabFit;
+		};
+		D0CE00000000000000000101 /* XCLocalSwiftPackageReference "../Packages/InkLabMultiRep" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabMultiRep;
+		};
+		D0CE00000000000000000111 /* XCLocalSwiftPackageReference "../Packages/InkLabRouter" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabRouter;
+		};
+		D0CE00000000000000000121 /* XCLocalSwiftPackageReference "../Packages/InkLabSearch" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/InkLabSearch;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		A100000000000000000000B2 /* InkLabKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = InkLabKit;
+		};
+		D0CE00000000000000000012 /* InkLabRecognition */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabRecognition;
+		};
+		D0CE00000000000000000022 /* InkLabDoc */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabDoc;
+		};
+		D0CE00000000000000000032 /* InkLabCanvasCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabCanvasCore;
+		};
+		D0CE00000000000000000042 /* InkLabMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabMath;
+		};
+		D0CE00000000000000000052 /* InkLabUnits */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabUnits;
+		};
+		D0CE00000000000000000062 /* InkLabChem */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabChem;
+		};
+		D0CE00000000000000000072 /* InkLabBio */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabBio;
+		};
+		D0CE00000000000000000082 /* InkLabReactive */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabReactive;
+		};
+		D0CE00000000000000000092 /* InkLabFit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabFit;
+		};
+		D0CE00000000000000000102 /* InkLabMultiRep */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabMultiRep;
+		};
+		D0CE00000000000000000112 /* InkLabRouter */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabRouter;
+		};
+		D0CE00000000000000000122 /* InkLabSearch */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InkLabSearch;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

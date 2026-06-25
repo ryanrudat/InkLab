@@ -60,6 +60,9 @@ public struct Polynomial: Equatable, Sendable {
     public static func atom(_ name: String) -> Polynomial { Polynomial([Monomial([name: 1]): .one]) }
 
     public var isZero: Bool { terms.isEmpty }
+    /// True if any coefficient is the overflow sentinel — i.e. exact arithmetic exceeded Int64 somewhere.
+    /// Callers must treat this as "can't verify" (degrade to unsupported), never as a real value.
+    public var isOverflow: Bool { terms.values.contains { $0.isOverflow } }
     public var atoms: Set<String> { terms.keys.reduce(into: Set()) { $0.formUnion($1.atoms) } }
 
     /// The constant value if this polynomial is a constant (0 or just a number), else nil.

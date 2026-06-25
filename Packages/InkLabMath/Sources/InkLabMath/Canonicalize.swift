@@ -9,6 +9,8 @@ public struct RationalFunction: Sendable {
     public init(num: Polynomial, den: Polynomial = .constant(.one)) { self.num = num; self.den = den }
 
     public var isWellDefined: Bool { !den.isZero }
+    /// True if exact arithmetic overflowed Int64 anywhere in the numerator or denominator.
+    public var isOverflow: Bool { num.isOverflow || den.isOverflow }
 
     public static func + (a: RationalFunction, b: RationalFunction) -> RationalFunction {
         RationalFunction(num: a.num * b.den + b.num * a.den, den: a.den * b.den)
@@ -50,7 +52,15 @@ public func canonicalize(_ e: Expr) -> RationalFunction {
     case .mul(let a, let b): return canonicalize(a) * canonicalize(b)
     case .div(let a, let b): return canonicalize(a) / canonicalize(b)
     case .pow(let base, let exp):
-        if let n = integerValue(of: exp) { return canonicalize(base).power(n) }
+        if let n = integerValue(of: exp) {
+            // Cap the expansion: an enormous exponent would hang the repeated-multiply expansion and/or
+            // overflow exact arithmetic. Beyond the cap, treat the power as an opaque atom so the tutor
+            // stays correct-or-silent (it won't verify identities it can't expand, but it won't hang/crash).
+            if n < -4096 || n > 4096 {
+                return RationalFunction(num: .atom("(\(canonicalKey(base)))^(\(n))"))
+            }
+            return canonicalize(base).power(n)
+        }
         // Symbolic/fractional exponent: treat the whole power as an opaque atom (e.g. 2^x, x^(1/2)).
         return RationalFunction(num: .atom("(\(canonicalKey(base)))^(\(canonicalKey(exp)))"))
     case .funcApp(let name, let args):

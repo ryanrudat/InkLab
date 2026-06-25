@@ -60,10 +60,46 @@ private func apply(_ op: Op, to proj: inout NotebookProjection) {
         if let pid = findPage(of: id, in: proj), var obj = proj.pages[pid]?.objects[id] {
             applyPatch(new, to: &obj); proj.pages[pid]?.objects[id] = obj
         }
+    case .setObjectState(let id, _, let new):
+        if let pid = findPage(of: id, in: proj), var obj = proj.pages[pid]?.objects[id] {
+            obj.payload = liveState(obj.payload, set: new); proj.pages[pid]?.objects[id] = obj
+        }
+    case .promote(let id, _, let new):
+        if let pid = findPage(of: id, in: proj), var obj = proj.pages[pid]?.objects[id] {
+            obj.payload = new
+            if let k = kind(for: new) { obj.kind = k }
+            proj.pages[pid]?.objects[id] = obj
+        }
     case .addEdge(let edge):
         proj.edges[edge.id] = edge
     case .removeEdge(let edge):
         proj.edges[edge.id] = nil
+    }
+}
+
+/// Apply a live-state string to whichever inline-state field the payload kind owns.
+private func liveState(_ payload: ObjectPayload, set state: String) -> ObjectPayload {
+    switch payload {
+    case .widget(let html, _, let policy): return .widget(html: html, jsState: state, sandboxPolicy: policy)
+    case .chart(_, let dataRef):           return .chart(specJSON: state, dataRef: dataRef)
+    case .object3D(let scene, _):          return .object3D(scene: scene, cameraJSON: state)
+    default:                               return payload   // no inline live state to set
+    }
+}
+
+/// The ObjectKind that matches a payload (so a promote keeps `kind` consistent with `payload`).
+private func kind(for payload: ObjectPayload) -> ObjectKind? {
+    switch payload {
+    case .ink:        return .ink
+    case .recognized: return .recognized
+    case .widget:     return .widget
+    case .sticker:    return .sticker
+    case .sticky:     return .sticky
+    case .callout:    return .callout
+    case .chart:      return .chart
+    case .object3D:   return .object3D
+    case .group:      return .group
+    case .unknown:    return nil
     }
 }
 
@@ -110,6 +146,10 @@ public func invert(_ op: Op, txn: UUID?, using clock: Clock) -> Op {
         inv = .addPage(meta: m)               // page removal is not modeled; addPage is idempotent
     case .setPageExtent(let id, let old, let new):
         inv = .setPageExtent(pageID: id, old: new, new: old)
+    case .setObjectState(let id, let old, let new):
+        inv = .setObjectState(objectID: id, old: new, new: old)
+    case .promote(let id, let old, let new):
+        inv = .promote(objectID: id, old: new, new: old)
     }
     return Op(id: clock.nextOpID(), hlc: clock.tick(), schemaVersion: op.schemaVersion,
                      notebookID: op.notebookID, transactionID: txn, undoesOpID: op.id, payload: inv)
@@ -170,6 +210,8 @@ public func remap(_ ops: [Op], idMap: [UUID: UUID], newNotebookID: UUID, using c
         case .removeEdge(let e): payload = .removeEdge(edge: remapEdge(e))
         case .addPage(let mm): payload = .addPage(meta: PageMeta(pageID: m(mm.pageID), index: mm.index, extentY: mm.extentY))
         case .setPageExtent(let id, let o, let n): payload = .setPageExtent(pageID: m(id), old: o, new: n)
+        case .setObjectState(let id, let o, let n): payload = .setObjectState(objectID: m(id), old: o, new: n)
+        case .promote(let id, let o, let n): payload = .promote(objectID: m(id), old: remapPayload(o), new: remapPayload(n))
         }
         return Op(id: clock.nextOpID(), hlc: clock.tick(), schemaVersion: op.schemaVersion,
                          notebookID: newNotebookID, transactionID: op.transactionID, undoesOpID: nil, payload: payload)
@@ -186,7 +228,13 @@ public final class Clock {
     private var counter: UInt16 = 0
     private var opCounter: UInt64 = 0
     public init(actor: UUID = UUID(), startWall: UInt64 = 0) { self.actor = actor; self.wall = startWall }
-    public func tick() -> HLC { counter &+= 1; return HLC(wallMillis: wall, counter: counter, actor: actor) }
+    public func tick() -> HLC {
+        // Strictly monotonic: when the 16-bit counter would overflow, advance the wall and reset the
+        // counter instead of WRAPPING (the old `&+=` rolled to 0 after 65,535 ops in one session, so a
+        // later op sorted BEFORE an earlier one — corrupting the total order that merge/LWW rely on).
+        if counter == .max { wall += 1; counter = 1 } else { counter += 1 }
+        return HLC(wallMillis: wall, counter: counter, actor: actor)
+    }
     public func nextOpID() -> OpID { opCounter += 1; return OpID(actor: actor, counter: opCounter) }
     /// Advance the wall component (used in tests so undo/remap ops sort AFTER the original log).
     public func advance(toWall w: UInt64) { if w > wall { wall = w; counter = 0 } }

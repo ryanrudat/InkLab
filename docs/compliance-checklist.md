@@ -41,3 +41,146 @@ Items marked 🔴 require legal counsel.
 
 > Re-verify the live wording of Apple's guidelines and Anthropic's Commercial Terms / Usage Policy /
 > Trust Center at signing — they update on independent cadences.
+
+---
+
+## Status (2026-06-08)
+
+Compliance remains **PRE-SHIP** and largely **outstanding** — the checklist above is unchanged and
+still current. The cloud path now works end-to-end in development, which raises the stakes on the gaps.
+
+**What exists today**
+- **Backend proxy** holds the Anthropic key off-device (Server reads `ANTHROPIC_API_KEY` from
+  `Server/.env`, which is **gitignored**) and enforces a **consent/age gate** on the cloud endpoints.
+- **Student data now persists on-device** (as of 2026-06-08): the op-log journal (JSONL) + per-page
+  PKDrawing ink blobs are written under Application Support per notebook (`FileJournalStorage`), and
+  the notebook list persists (`library.json`). All of it is written with locked-device file protection
+  (`FileProtectionType.completeUntilFirstUserAuthentication`) and `fsync` on flush — so handwriting
+  stays **at rest, on-device, encrypted while the device is locked**, and never leaves the device on
+  the deterministic engines / native-widget paths. (CloudKit sync is **not** built; if/when it lands it
+  is a new data-flow that re-opens the data-residency-for-minors question below.)
+- **Generated-widget sandbox** (the make-real WebViews): the CSP now allows `script-src 'unsafe-eval'`
+  alongside `'unsafe-inline'` so graphers/calculators can evaluate a user-typed expression. **This is
+  not a sandbox regression.** The safety boundary was never the JS-eval restriction — it is **network
+  isolation**: `default-src 'none'` (+ no `connect-src`/`img-src`-to-network), `baseURL` nil, a
+  navigation delegate that cancels navigation, and the server-side validator that blocks
+  external/`fetch`/`<iframe>` content. A widget can evaluate a typed expression but **cannot reach the
+  network or escape its card**, so no student data can be exfiltrated from a widget.
+
+**Still needed before any minor uses the cloud path (unchanged, just current)**
+- **Consent settings are still in-memory and reset every launch.** Only the notebook list +
+  journal/ink persist; the cloud-AI opt-in / `userKind` / `ageVerified` (`AppSettings`) do **not** —
+  persisting consent state durably (and enforcing it server-side at the proxy) is still TODO.
+- **Verifiable parental-consent flow** (COPPA VPC) — not yet built.
+- **In-app §5.1.2(i) AI-disclosure / permission prompt** — the app currently sends a **hardcoded
+  adult/consented/online session**; there is no real age screen, permission prompt, or reachability.
+- **Input/output moderation** (the "Organizations Serving Minors" safeguards).
+- **ZDR + written data-retention policy.**
+- **App Privacy labels + signed `PrivacyInfo.xcprivacy`.**
+- **In-app account deletion.**
+- **Hosting is interim (Railway).** Revisit before publication — **data residency for minors** and
+  **ZDR** are not settled on Railway; the proxy host must be confirmed against the COPPA/FERPA posture.
+- **Legal counsel sign-off** on the items marked 🔴.
+
+---
+
+## Status (2026-06-09)
+
+Compliance remains **PRE-SHIP** and largely **outstanding** — the checklist above and the 2026-06-08
+status are unchanged. One architectural item was meaningfully strengthened this session.
+
+**Hardened this session**
+- **Consent gate is now FAIL-CLOSED at the proxy** (was fail-open). `Server/src/consent.ts`
+  `cloudEligible` previously blocked only the literal `userKind === 'minorUnconsented'`; any
+  typo'd / tampered / missing / unknown `userKind` (the session is untrusted JSON, validated nowhere)
+  fell through to **allowed** — so a minor's ink could reach Anthropic. It now validates the session
+  **shape** at runtime and **whitelists only known-eligible kinds** (`adult` / `minorConsented` /
+  `schoolManaged`, with `ageVerified`), **defaulting to BLOCKED**. This is a real strengthening of
+  "consent enforced server-side at the proxy." New tests. (Note: the Swift `DefaultCloudPolicy` still
+  omits the `ageVerified` safeguard — LOW / dead-code today, since the app gates via
+  `MakeRealSession.blockReason` which does check it — but align it if `RoutingRecognizer` is ever
+  wired for minors.)
+- **Proxy no longer leaks internals**: errors are now generic (500 "internal error" / 502 "upstream
+  error") and `anthropic.ts` no longer embeds the verbatim upstream Anthropic error body
+  (incl. `request_id`) in propagated errors. Added a **request body-size cap** (8 MB → 413), a **400**
+  on malformed/missing JSON (was a 500), and broadened `validateWidgetHtml` (defense-in-depth; the
+  on-device WKWebView CSP remains the real boundary).
+
+**Still outstanding (unchanged)**
+- First-run **§5.1.2(i) AI-disclosure / permission prompt** and **persisting consent state** durably.
+- **Verifiable parental-consent flow** (COPPA VPC).
+- **Input/output moderation** ("Organizations Serving Minors" safeguards).
+- **ZDR + written data-retention policy.**
+- **App Privacy labels + signed `PrivacyInfo.xcprivacy`.**
+- **In-app account deletion.**
+- **Legal counsel sign-off** on the items marked 🔴.
+
+---
+
+## Status (2026-06-17) — backup/sync decision keeps data OUT of our custody
+
+A user lost notebooks by deleting the (dev-installed) app — there is **no backup today**, so a backup
+path is needed. The chosen architecture (**ADR 0006**) is **compliance-preserving by design**:
+- **Backup/sync stays serverless.** A **Files / iCloud-Drive export** ships first, then **CloudKit**
+  (the user's own private iCloud database). Neither puts notebook content on infrastructure we operate,
+  so **InkLab never becomes a custodian of user (incl. minors') handwriting** — preserving the on-device
+  posture above and avoiding new COPPA/FERPA retention/deletion/breach obligations.
+- **The Railway proxy must stay STATELESS** (forwards prompts to Claude; stores nothing). Storing
+  notebooks on it would directly contradict the §"Architecture" data-minimization items and the
+  data-residency-for-minors gate. Explicitly out of scope for the proxy.
+- **On import / cross-device sync, re-validate generated widget HTML** before loading (untrusted-origin
+  rule) — tracked with the make-real sandbox boundary.
+
+Account-deletion (§5.1.1(v)) should, once accounts exist, also delete the CloudKit zone + any exports.
+Otherwise the checklist above is unchanged and still PRE-SHIP.
+
+---
+
+## Status (2026-06-25) — consent is now driven by a real Settings UI (but still doesn't persist)
+
+Compliance remains **PRE-SHIP** and largely **outstanding**. The checklist above and all prior status
+sections are unchanged. One client-side gap from 2026-06-08 has been partially closed; the rest stand.
+
+**Changed this session — the "hardcoded adult/consented session" is gone**
+- The make-real session is now **wired to a real Settings screen**, not a hardcoded
+  `adult/consented/online` literal. `AppSettings` (in `Library.swift`) holds `cloudAIConsentGranted`
+  (**OFF by default**), `userKind` (`adult` / `minorConsented` / `minorUnconsented` / `schoolManaged`),
+  and `ageVerified`; it builds `makeRealSession`, and `CanvasScreen` mirrors it into the canvas model
+  (live, via `onChange`) so a real user's state — not a constant — gates every generation. `SettingsView`
+  exposes the user-kind picker, an age-verified toggle (shown for non-adults), and an explicit
+  "Allow AI generation" opt-in carrying the §5.1.2(i) wording. With the toggle off, `blockReason`
+  short-circuits the "@" path before any network call. **This makes the on-device gate real**, on top
+  of the fail-closed server-side re-check (`Server/src/consent.ts`, which validates session shape and
+  whitelists only `adult` / `minorConsented` / `schoolManaged` with `ageVerified`).
+- The previous 2026-06-08 line — *"the app currently sends a hardcoded adult/consented/online session;
+  there is no real age screen, permission prompt"* — is now **stale** and superseded by the above.
+
+**Still missing on the client (the gap narrowed, it did not close)**
+- **Consent state still does NOT persist.** `cloudAIConsentGranted`, `userKind`, and `ageVerified` have
+  **no `didSet`/UserDefaults backing** and **reset to defaults every launch** (adult / not consented /
+  not age-verified). Only `defaultPaper` and `snapShapesOnHold` persist. Durable consent persistence is
+  still TODO. (Net effect today is fail-safe — it resets to *unconsented* — but it is not the required
+  durable record.)
+- **No first-run §5.1.2(i) disclosure / permission prompt.** Consent lives in Settings, opt-in and off
+  by default, but there is **no forced first-launch disclosure or neutral age screen** before the first
+  cloud call — the user must find the toggle. No onboarding/consent sheet exists in the app entry point.
+
+**Still outstanding (unchanged — verified absent this session)**
+- **Verifiable parental-consent flow** (COPPA VPC) — not built.
+- **Input/output moderation** ("Organizations Serving Minors" safeguards) — no moderation in `Server/src`.
+- **ZDR + written data-retention policy.**
+- **App Privacy labels + signed `PrivacyInfo.xcprivacy`** — no `.xcprivacy` file exists in the repo.
+- **In-app account deletion** (§5.1.1(v)) — only per-notebook delete exists, not account/data wipe.
+- **Files/iCloud-Drive export + CloudKit backup** (ADR 0006) — not yet built; storage is still the
+  on-device file journal (CloudKit noted as "later" behind the storage protocol).
+- **Hosting is still interim (Railway).** Config present (`railway.json`, `.nvmrc`, `.railwayignore`);
+  data-residency-for-minors / ZDR not settled on Railway. Revisit before publication.
+- **Legal counsel sign-off** on the items marked 🔴.
+
+> Note: the floating-dock rewrite this session (global-coordinate drag, side-wall snap-to-vertical) is
+> a UI-layout change only and has **no compliance surface** — it touches no data flow, network, or
+> consent path.
+
+> The repo is now a **public GitHub repo** (`https://github.com/ryanrudat/InkLab`). The Anthropic key
+> stays off-device in the proxy and `Server/.env` is gitignored; confirm no secrets are committed before
+> each push (the key, signed DPAs, and any consent records must never enter the public history).

@@ -21,6 +21,7 @@ public enum ParseError: Error, Equatable, Sendable {
     case unexpectedCharacter(Character)
     case unexpectedToken(String)
     case unexpectedEnd
+    case numberTooLarge   // a literal (or exact result) exceeded Int64 — degrade, never trap
 }
 
 let knownFunctions: Set<String> = ["sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "sqrt", "abs"]
@@ -44,13 +45,30 @@ func tokenize(_ s: String) throws -> [Token] {
         if c == " " || c == "\t" { i += 1; continue }
         if isDigit(c) || (c == "." && i + 1 < chars.count && isDigit(chars[i + 1])) {
             var intPart = 0, frac = 0, scale = 1, sawDot = false
+            // Checked accumulation: a long literal (e.g. a 20-digit decimal) must throw, not trap.
+            func acc(_ value: Int, times10AddingDigit d: Int) throws -> Int {
+                let (m, o1) = value.multipliedReportingOverflow(by: 10)
+                let (s, o2) = m.addingReportingOverflow(d)
+                if o1 || o2 { throw ParseError.numberTooLarge }
+                return s
+            }
             while i < chars.count, isDigit(chars[i]) || chars[i] == "." {
                 if chars[i] == "." { if sawDot { throw ParseError.unexpectedCharacter(".") }; sawDot = true; i += 1; continue }
                 let d = chars[i].wholeNumberValue ?? 0
-                if sawDot { frac = frac * 10 + d; scale *= 10 } else { intPart = intPart * 10 + d }
+                if sawDot {
+                    frac = try acc(frac, times10AddingDigit: d)
+                    let (s, o) = scale.multipliedReportingOverflow(by: 10)
+                    if o { throw ParseError.numberTooLarge }
+                    scale = s
+                } else {
+                    intPart = try acc(intPart, times10AddingDigit: d)
+                }
                 i += 1
             }
-            tokens.append(.number(Rational(intPart * scale + frac, scale)))
+            let (ip, o1) = intPart.multipliedReportingOverflow(by: scale)
+            let (n, o2) = ip.addingReportingOverflow(frac)
+            if o1 || o2 { throw ParseError.numberTooLarge }
+            tokens.append(.number(Rational(n, scale)))
             continue
         }
         if isLetter(c) {

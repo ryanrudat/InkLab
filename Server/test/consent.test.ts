@@ -32,3 +32,21 @@ test('consented minor must be age-verified', () => {
 test('school-managed minor (age-verified) is allowed', () => {
   assert.equal(cloudEligible({ ...base, userKind: 'schoolManaged' }).allowed, true)
 })
+
+// --- fail-closed: untrusted session shape (the gate is a whitelist, not a blacklist) ---
+
+test('unknown/typo userKind is BLOCKED, not allowed (no fall-through)', () => {
+  // The old blacklist allowed anything except the literal 'minorUnconsented' — a misclassified or
+  // tampered minor would have passed. The whitelist must block it.
+  assert.equal(cloudEligible({ ...base, userKind: 'kid' as any }).allowed, false)
+  assert.equal(cloudEligible({ ...base, userKind: 'MINORUNCONSENTED' as any }).allowed, false)
+})
+
+test('missing or malformed session is blocked', () => {
+  assert.equal(cloudEligible(undefined).allowed, false)
+  assert.equal(cloudEligible(null).allowed, false)
+  assert.equal(cloudEligible({}).allowed, false)
+  assert.equal(cloudEligible({ ...base, userKind: undefined as any }).allowed, false)
+  assert.equal(cloudEligible({ ...base, isOnline: 'yes' as any }).allowed, false)
+  assert.equal(cloudEligible({ ...base, ageVerified: undefined as any }).allowed, false)
+})

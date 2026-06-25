@@ -78,3 +78,52 @@ a performance change only, semantics unchanged.
 - `CKSyncEngine` per-object upload cadence is unproven at notebook scale → on-device cadence benchmark before broad build.
 - The PKDrawing quarantine + raster fallback MUST ship in the first ink-bearing build (data-loss path if skipped).
 - automerge-swift is pre-1.0 → strictly behind the seam, swappable for a hand-rolled per-field RGA.
+
+---
+
+## Implementation status (2026-06-07)
+
+The decision stands. Amendments from this session:
+
+- **Two additive ops** were added to the journal, both **one-step-undoable** with fold/invert/remap arms + tests:
+  - `setObjectState` — edits a live widget/chart/3D object's inline state.
+  - `promote` — energy-level swap (e.g. sticker ↔ interactive ↔ 3D).
+  Existing case serialization is unchanged; `InkLabDoc` now has **9 passing tests** (the two new ops included).
+- **Live widgets render via a polymorphic host** that rebuilds in place when an object's payload kind changes (text cards, native widgets, and a locked-down `WKWebView` for generated HTML).
+- **Still IN-MEMORY only.** The GRDB local op-log + blob store and CloudKit/`CKSyncEngine` sync remain deferred (see "Deferred to the on-device phase") — nothing survives relaunch yet.
+- **PencilKit ink is NOT yet written into the journal** — strokes currently live only in the live `PKCanvasView`. The never-lose-ink guarantee in §"Decision" is therefore not yet realized; wiring the PencilKit adapter into the append-only log is outstanding.
+
+## Implementation status (2026-06-08)
+
+The journal now **persists across relaunch** — closing the two outstanding gaps from 2026-06-07 ("still in-memory only", "ink not written into the journal"). A new swappable **`JournalStorage`** protocol (`InkLab/InkLab/JournalStorage.swift`) sits behind `JournalStore`, with a file-backed `FileJournalStorage` impl scoped per notebook under Application Support:
+
+- **Op log** = `oplog.jsonl`, append-only, one compact-JSON `Op` per line — append is O(1) via `FileHandle.seekToEnd` + `synchronize()` (fsync) to shrink the torn-tail window; a torn/forward-incompatible line is skipped, never fatal (matches the "recoverable projection" intent). **Ink blobs** = one `PKDrawing` `Data` per page (`ink/<page>.drawing`), passed as `Data` so the storage layer stays PencilKit-free.
+- **On launch**: `JournalStore` replays the persisted op log via `fold`. Because `fold` orders by HLC (not append order), the **`Clock` is reseeded past the loaded ops** (`advance(toWall: maxLoadedWall + 1)`) so new edits sort after everything on disk.
+- **Stable notebook ids**: the notebook **LIST persists** too (`Library` → `library.json`; `Notebook` is now `Codable` with a stable `id`), required so each notebook's storage dir is stable across launches. Deleting a notebook also removes its on-disk store.
+- **Never-lose-ink, as-built**: ink flushes on a debounce, and a **background/suspend flush** (`willResignActive` / `didEnterBackground` → `flushInkNow`) writes the current page synchronously; FileProtection `completeUntilFirstUserAuthentication` keeps locked-device background writes from silently failing.
+- **Relaunch reopens the LAST-VIEWED page** (per-notebook `UserDefaults` key), not always page 1 — so later-page work isn't perceived as lost.
+- **Undo/redo stacks are session-only by design** (not persisted) — the *inverse* ops are still written to the log, so an undone edit stays undone across relaunch; only the back/forward history resets.
+
+Tests (`InkLab/InkLabTests`): `journalPersistsAndReloads`, `reloadReopensLastViewedPage`, `persistedUndoSurvivesReloadHistoryResets`.
+
+**Deviation from the decision:** the local store is an **interim file-backed JSONL/blob store, not the GRDB/SQLite schema** (`ops`/`snapshots`/`blobs`) named in §"Decision" sub-decision #2 and §"Deferred". GRDB is the eventual target and drops in behind this same `JournalStorage` protocol; **op-log compaction, the GRDB impl, and CloudKit/`CKSyncEngine` sync remain deferred.**
+
+## Implementation status (2026-06-09)
+
+Correctness/integrity hardening of the journal and its persistence, plus direct-manipulation edits that route through the object model. The decision stands.
+
+- **HLC total order is now strictly monotonic (A5).** `Clock.tick()` used a **wrapping `UInt16` counter** that never advanced the wall within a session, so after 65,536 ops the total order corrupted. `tick()` now **advances the wall on counter overflow** — the invariant the whole sort-union merge and reseed-on-load logic depends on. Regression test.
+- **Op-log replay distinguishes a torn tail from interior corruption (A6).** `FileJournalStorage.loadOps` previously silently dropped **any** unreadable line, so an interior corrupt/forward-incompatible op left a replay **hole**; it now treats only a **benign torn tail** as recoverable and logs **interior corruption loudly**. `JournalStorage.append` (and `JournalStore`) are now **throwing**, so a real persistence failure is **surfaced** (an `onPersistenceError` hook) instead of being swallowed while the live session shows the op as saved — tightening the never-lose-ink path.
+- **Async results are tagged to their originating page (A7).** Async make-real / Check / Recognize results and the auto-"@" scan could land on the **wrong page** after a page switch; the originating page is now captured and guarded, and a pending auto-scan is cancelled on a page switch — so a result is never journaled onto the wrong page.
+- **Lasso move + cut/copy/paste journal through the object model (B1/B2).** A lasso **move** of a mixed handwriting+object selection commits its object ops as **one journal transaction** (`setTransform × n`); **delete/cut/copy/paste** reuse one **generalized combined history step** (`HistoryStep.compound` + `commitCompound`), so each is **one undo step** (objects = one journal transaction, ink = before→after drawing, reversed together) — i.e. these edits are inside global undo *by construction*, as §"Decision" intends. Copy/paste use a **static session clipboard**, so paste works **across pages and across notebooks** (object refs remapped on paste, matching the cross-notebook-paste guarantee already tested in `InkLabDoc`).
+- **Still open:** the uncertain `fold(_:from:)` incremental-compaction **high-water trap** is **unreachable today** (no compaction store is wired) but should be fixed **before GRDB/compaction lands** — it sits on the compaction-correctness risk already flagged in §"Risks".
+
+## Backup & sync direction (2026-06-17)
+
+The §"Decision" CloudKit (`CKSyncEngine`) sync target is now captured as its own decision —
+**[ADR 0006](0006-backup-and-sync.md)** — prompted by a real on-device data loss (a user deleted the app;
+on-device-only storage + no backup = unrecoverable). It reaffirms **serverless** backup: a **Files /
+iCloud-Drive export** ships first as an immediate safety net, then CloudKit (the user's own iCloud). It
+also rules out storing notebooks on our proxy (data-custody/COPPA-FERPA). No change to the op-log model
+here — CloudKit remains one record per object (compacted snapshot + op-tail), and widget HTML received from
+another device must be re-validated before loading.

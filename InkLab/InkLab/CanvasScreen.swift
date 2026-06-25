@@ -1,11 +1,13 @@
 import SwiftUI
 import UIKit
+import InkLabKit
 
 /// The page editor: the UIKit canvas + a floating SwiftUI toolbar and an "@" command bar that runs
 /// the deterministic engines (brief §5, §5.3).
 struct CanvasScreen: View {
     let notebook: Notebook
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var library: Library
     @StateObject private var model: CanvasModel
     @State private var command = ""
     @State private var showCommand = false
@@ -19,7 +21,7 @@ struct CanvasScreen: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            CanvasRepresentable(model: model, onStatus: { showStatus($0) })
+            CanvasRepresentable(model: model, notebookID: notebook.id, onStatus: { showStatus($0) })
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -28,59 +30,45 @@ struct CanvasScreen: View {
             }
 
             if let status { statusToast(status) }
-            toolbar.padding(.bottom, 10)
+            // The dock is its OWN view: its drag/collapse state stays local, so moving it never
+            // re-renders this screen (which would re-run the canvas's updateUIViewController and stutter).
+            FloatingDock(model: model)
+        }
+        .onAppear {
+            model.fingerDrawing = settings.fingerDrawing
+            model.autoCommands = settings.autoCommands
+            model.snapShapesOnHold = settings.snapShapesOnHold
+            model.makeRealSession = settings.makeRealSession
+        }
+        .onChange(of: settings.fingerDrawing) { _, newValue in model.fingerDrawing = newValue }
+        .onChange(of: settings.autoCommands) { _, newValue in model.autoCommands = newValue }
+        .onChange(of: settings.snapShapesOnHold) { _, newValue in model.snapShapesOnHold = newValue }
+        .onChange(of: settings.makeRealSession) { _, newValue in model.makeRealSession = newValue }
+        // Persist the live paper choice back to this notebook so closing/reopening the app restores it
+        // (otherwise the canvas reseeds from the notebook's original paper and reverts to ruled).
+        .onChange(of: model.paper) { _, newPaper in library.setPaper(notebook.id, newPaper) }
+        .sheet(item: $model.pendingRecognition) { draft in
+            RecognitionReviewView(draft: draft) { result in
+                model.onInsertResult?(result)
+            }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: settings.leftHanded ? .topBarLeading : .topBarTrailing) {
                 Button {
                     withAnimation { showCommand.toggle() }
                     commandFocused = showCommand
                 } label: { Image(systemName: "at.circle\(showCommand ? ".fill" : "")") }
+                .accessibilityIdentifier("atButton")
             }
         }
     }
-
-    // MARK: Toolbar
-
-    private var toolbar: some View {
-        HStack(spacing: 16) {
-            ForEach(CanvasTool.allCases) { tool in
-                Button { model.tool = tool } label: { Image(systemName: tool.systemImage) }
-                    .foregroundStyle(model.tool == tool ? Color.accentColor : .secondary)
-            }
-            divider
-            ColorPicker("", selection: $model.penColor, supportsOpacity: false).labelsHidden().frame(width: 28)
-            Menu {
-                Button("Thin") { model.penWidth = 2 }
-                Button("Medium") { model.penWidth = 4 }
-                Button("Thick") { model.penWidth = 8 }
-            } label: { Image(systemName: "lineweight") }
-            divider
-            Menu {
-                ForEach(PaperType.allCases) { p in
-                    Button { model.paper = p } label: { Label(p.label, systemImage: p.systemImage) }
-                }
-            } label: { Image(systemName: "doc") }
-            Button { model.onAddSticky?() } label: { Image(systemName: "note.text.badge.plus") }
-            divider
-            Button { model.onUndo?() } label: { Image(systemName: "arrow.uturn.backward") }
-            Button { model.onRedo?() } label: { Image(systemName: "arrow.uturn.forward") }
-        }
-        .font(.title3)
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 18).padding(.vertical, 12)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(radius: 5, y: 2)
-    }
-
-    private var divider: some View { Divider().frame(height: 22) }
 
     // MARK: Command bar
 
     private var commandBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "at").foregroundStyle(.secondary)
-            TextField("@balance H2 + O2 -> H2O  ·  @molar C6H12O6  ·  @units 5 m + 3 s  ·  @transcribe ATGGCC", text: $command)
+            TextField("@a clock  ·  @a pendulum  ·  @scientific calculator      (engines: @balance · @molar · @check)", text: $command)
                 .focused($commandFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -95,10 +83,18 @@ struct CanvasScreen: View {
     private func runCmd() {
         let text = command.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
-        let result = runCommand(text)
-        model.onInsertResult?(result)
-        showStatus(result)
+        if isDeterministicEngineCommand(text) {
+            // Correctness-critical work stays with the exact engines (READ vs COMPUTE), not generation.
+            let result = runCommand(text)
+            model.onInsertResult?(result)
+            showStatus(result)
+        } else {
+            // Everything else — "@a clock", "@a calculator", "@a pendulum sim", anything — is GENERATED
+            // in real-time by Claude and rendered live (make-real).
+            model.onMakeReal?(makeRealPrompt(text))
+        }
         command = ""
+        commandFocused = false   // dismiss the keyboard so the new object isn't covered
     }
 
     // MARK: Status toast
@@ -114,6 +110,7 @@ struct CanvasScreen: View {
     }
 
     private func showStatus(_ s: String) {
+        guard !s.isEmpty else { withAnimation { status = nil }; return }
         withAnimation { status = s }
         Task {
             try? await Task.sleep(for: .seconds(2.8))
@@ -122,23 +119,387 @@ struct CanvasScreen: View {
     }
 }
 
+/// Where the dock rests. `.floating` is the free, horizontal capsule; `.left`/`.right` snap it flush to
+/// a side wall and reflow it VERTICAL. Persisted as a raw string via `@AppStorage`.
+enum DockPlacement: String { case floating, left, right }
+
+/// The floating dock: repositionable, collapsible, and edge-aware. It glides freely while dragging — the
+/// drag is tracked in GLOBAL coordinates, so the dock can't chase its own movement (a `.local`-space drag
+/// fed each frame's offset back into the next frame's translation, which is what made the old drag
+/// jitter/vibrate). Released near a side wall it snaps flush and reflows vertical; released anywhere else
+/// it floats horizontally. It holds ONLY the drag/placement state + the grip; the heavy toolbar content
+/// lives in `DockBar`, whose only inputs (`model`, `axis`) are unchanged during a drag, so SwiftUI skips
+/// its body and the inline pickers/menus are never rebuilt mid-drag. Center + placement persist (the
+/// center as a FRACTION of the container, so it survives rotation and split-view resizes).
+private struct FloatingDock: View {
+    @ObservedObject var model: CanvasModel
+    @AppStorage("inklab.dock.fx") private var fx = 0.5          // committed center X, fraction of width
+    @AppStorage("inklab.dock.fy") private var fy = 0.94         // committed center Y, fraction of height
+    @AppStorage("inklab.dock.placement") private var placement: DockPlacement = .floating
+    /// Live finger translation in GLOBAL space. `nil` ⇒ no drag in flight; non-nil ⇒ dragging — which lets
+    /// an edge-docked dock be pulled FREELY off its wall instead of staying pinned. Auto-resets to `nil`.
+    @GestureState private var dragTranslation: CGSize? = nil
+    @State private var barSize: CGSize = .zero                  // measured, so the clamp keeps it on-screen
+
+    private var axis: Axis { placement == .floating ? .horizontal : .vertical }
+    private let edgeInset: CGFloat = 14                         // gap kept between the dock and any wall
+    /// One spring drives BOTH the snap (placement/center) and the post-reflow re-measure, so the
+    /// horizontal↔vertical transition reads as a single motion instead of two contending settles.
+    private let settle: Animation = .spring(response: 0.34, dampingFraction: 0.82)
+
+    var body: some View {
+        GeometryReader { geo in
+            content(geo)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { newSize in
+                    guard newSize != barSize else { return }
+                    // First measure: snap. Later changes (tool toggles, horizontal↔vertical reflow): animate
+                    // so the re-clamp into its resting/pinned spot slides instead of popping.
+                    if barSize == .zero { barSize = newSize }
+                    else { withAnimation(settle) { barSize = newSize } }
+                }
+                // Hide the first, un-measured frame so a persisted edge placement can't flash mid-screen
+                // before the real size pins it flush.
+                .opacity(barSize == .zero ? 0 : 1)
+                .position(livePosition(in: geo.size))
+        }
+        .ignoresSafeArea(.keyboard)
+    }
+
+    @ViewBuilder private func content(_ geo: GeometryProxy) -> some View {
+        if model.dockCollapsed {
+            puck(geo)
+        } else {
+            let layout = axis == .vertical ? AnyLayout(VStackLayout(spacing: 12))
+                                           : AnyLayout(HStackLayout(spacing: 12))
+            layout {
+                grip(geo)
+                DockBar(model: model, axis: axis)   // stable input → NOT rebuilt while dragging
+            }
+            .font(.title3)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(radius: 5, y: 2)
+        }
+    }
+
+    /// Collapsed state: a small puck showing the active tool. Tap to expand; drag to move.
+    private func puck(_ geo: GeometryProxy) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: model.tool.systemImage)
+            Image(systemName: "chevron.up").font(.caption2).foregroundStyle(.secondary)
+        }
+        .font(.title3).foregroundStyle(.primary)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(radius: 5, y: 2)
+        .contentShape(Capsule())
+        .onTapGesture { withAnimation(.spring(duration: 0.3)) { model.dockCollapsed = false } }
+        // Larger slop on the puck: it ALSO taps-to-expand, so only a deliberate move should start a drag —
+        // otherwise a slightly-wobbly tap gets swallowed as a micro-drag.
+        .gesture(dockDrag(geo, minDistance: 10))
+        .accessibilityIdentifier("expandToolbar")
+    }
+
+    /// The drag handle (only this moves the dock, so the tool buttons stay tappable). A generous hit area
+    /// makes it easy to grab; small slop so it starts dragging immediately (the grip has no competing tap).
+    private func grip(_ geo: GeometryProxy) -> some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.body).foregroundStyle(.secondary)
+            .padding(6)
+            .contentShape(Rectangle())
+            .gesture(dockDrag(geo, minDistance: 2))
+            .accessibilityIdentifier("dockGrip")
+    }
+
+    private func dockDrag(_ geo: GeometryProxy, minDistance: CGFloat) -> some Gesture {
+        // `.global` decouples the reported translation from the dock's own movement (no feedback loop → no
+        // jitter). `minDistance` is small on the grip (instant) and larger on the tap-also puck.
+        DragGesture(minimumDistance: minDistance, coordinateSpace: .global)
+            .updating($dragTranslation) { value, state, _ in state = value.translation }
+            .onEnded { value in endDrag(value.translation, in: geo.size) }
+    }
+
+    // MARK: Positioning
+
+    private func committedCenter(in c: CGSize) -> CGPoint { CGPoint(x: fx * c.width, y: fy * c.height) }
+
+    /// Where the dock ACTUALLY sits at rest right now — the persisted fraction run through the placement
+    /// pin. The drag must start from HERE, not from the raw fraction: an edge-docked dock's stored `fx` is
+    /// a stale horizontal value the pin overrides, so following the finger from it would jump on grab.
+    private func currentRestingCenter(in c: CGSize) -> CGPoint { restingCenter(committedCenter(in: c), in: c) }
+
+    /// The dock center this frame: free-following the finger mid-drag (edge pin released, so it can be
+    /// pulled off a wall), otherwise resting at its committed/pinned spot.
+    private func livePosition(in c: CGSize) -> CGPoint {
+        let base = currentRestingCenter(in: c)
+        if let t = dragTranslation {
+            return clampToBounds(CGPoint(x: base.x + t.width, y: base.y + t.height), in: c)
+        }
+        return base
+    }
+
+    /// Resting position for the current placement: edge placements pin flush to the wall (x fixed by the
+    /// CURRENT measured size, so the vertical bar sits snug after it reflows); floating just stays in bounds.
+    private func restingCenter(_ p: CGPoint, in c: CGSize) -> CGPoint {
+        let halfW = barSize.width / 2, halfH = barSize.height / 2
+        let y = clamped(p.y, half: halfH, span: c.height)
+        switch placement {
+        case .left:     return CGPoint(x: halfW + edgeInset, y: y)
+        case .right:    return CGPoint(x: c.width - halfW - edgeInset, y: y)
+        case .floating: return CGPoint(x: clamped(p.x, half: halfW, span: c.width), y: y)
+        }
+    }
+
+    private func clampToBounds(_ p: CGPoint, in c: CGSize) -> CGPoint {
+        CGPoint(x: clamped(p.x, half: barSize.width / 2, span: c.width),
+                y: clamped(p.y, half: barSize.height / 2, span: c.height))
+    }
+
+    /// Keep a center coordinate so the whole dock (± its half-extent + inset) stays within `span`.
+    private func clamped(_ v: CGFloat, half: CGFloat, span: CGFloat) -> CGFloat {
+        guard span > 0 else { return v }
+        let lo = half + edgeInset, hi = span - half - edgeInset
+        guard lo <= hi else { return span / 2 }                 // dock larger than the axis → center it
+        return min(hi, max(lo, v))
+    }
+
+    /// On release: pick the placement from where it was dropped (push a wall ⇒ dock to it; drop in the
+    /// middle ⇒ float), then spring into the resting/reflowed form. Persist the center as a fraction.
+    private func endDrag(_ translation: CGSize, in c: CGSize) {
+        guard c.width > 0, c.height > 0 else { return }
+        let base = currentRestingCenter(in: c)                   // start from where it really sits (not raw fx)
+        let rawX = base.x + translation.width
+        let rawY = base.y + translation.height
+        let halfW = barSize.width / 2
+        let snapZone: CGFloat = 48                               // how close to a wall counts as "docked"
+        let newPlacement: DockPlacement =
+            (rawX - halfW) < snapZone        ? .left :
+            (c.width - (rawX + halfW)) < snapZone ? .right : .floating
+        let drop = clampToBounds(CGPoint(x: rawX, y: rawY), in: c)
+        withAnimation(settle) {
+            placement = newPlacement
+            fx = drop.x / c.width
+            fy = drop.y / c.height
+        }
+    }
+}
+
+/// The toolbar CONTENT — tools, contextual color/size, pen favorites, insert menu, undo/redo, page nav,
+/// and the collapse button. A SEPARATE view with a single `@ObservedObject` input, so SwiftUI skips
+/// re-rendering it while the dock is being dragged (the parent's offset changes, not this view's input).
+private struct DockBar: View {
+    @ObservedObject var model: CanvasModel
+    /// Set by the dock: `.horizontal` for the floating capsule, `.vertical` when snapped to a side wall.
+    /// Changing it reflows the whole bar via `AnyLayout` (preserving child identity, so it animates). It
+    /// only changes on a snap — never mid-drag — so the drag-perf isolation still holds.
+    var axis: Axis
+    @State private var showColorPopover = false
+
+    private static let quickColors = ["#1C1C1E", "#4F9DFF", "#FF3B30", "#34C759", "#FF9F0A", "#AF52DE", "#00C7BE", "#FFFFFF"]
+
+    var body: some View {
+        let layout = axis == .vertical ? AnyLayout(VStackLayout(spacing: 14))
+                                       : AnyLayout(HStackLayout(spacing: 14))
+        layout {
+            ForEach(CanvasTool.allCases) { tool in
+                Button { model.tool = tool } label: { Image(systemName: tool.systemImage) }
+                    .foregroundStyle(model.tool == tool ? Color.accentColor : .secondary)
+            }
+            // Color + thickness appear ONLY for the drawing tools (contextual — like GoodNotes/Notability).
+            // Colors (scrollable strip + current/custom picker) are grouped together and kept SEPARATE
+            // from thickness, so changing color never disturbs the chosen stroke width.
+            if model.tool == .pen || model.tool == .highlighter {
+                divider
+                colorStrip
+                customColorPicker
+                divider
+                sizeDots
+            }
+            divider
+            Button { model.onAddSticky?() } label: { Image(systemName: "note.text.badge.plus") }
+                .accessibilityIdentifier("addSticky")
+            insertMenu
+            divider
+            Button { model.onUndo?() } label: { Image(systemName: "arrow.uturn.backward") }
+            Button { model.onRedo?() } label: { Image(systemName: "arrow.uturn.forward") }
+            divider
+            Button { model.onPrevPage?() } label: { Image(systemName: axis == .vertical ? "chevron.up" : "chevron.left") }
+                .accessibilityIdentifier("prevPage")
+            Text(model.pageIndicator).font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 22)
+            Button { model.onNextPage?() } label: { Image(systemName: axis == .vertical ? "chevron.down" : "chevron.right") }
+                .accessibilityIdentifier("nextPage")
+            divider
+            Button { withAnimation(.spring(duration: 0.3)) { model.dockCollapsed = true } } label: {
+                Image(systemName: axis == .vertical ? "chevron.compact.down" : "chevron.compact.right")
+            }
+            .accessibilityIdentifier("collapseToolbar")
+        }
+        .animation(.easeInOut(duration: 0.15), value: model.tool)
+    }
+
+    /// The active tool's saved colors in a FIXED-WIDTH horizontal scroller, so saving lots of colors
+    /// scrolls sideways instead of widening the dock off the iPad screen. Tap to apply (color ONLY —
+    /// the thickness is left alone), long-press to delete, and the dashed ＋ saves the current color.
+    /// Persisted across launches.
+    private var colorStrip: some View {
+        // The strip scrolls along the dock's axis: a horizontal window when floating, a vertical one when
+        // wall-docked — so the dock never grows past a fixed extent in either orientation.
+        let vertical = axis == .vertical
+        let window = min(CGFloat(max(model.currentColors.count, 1)) * 32, 124)
+        let outer = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        let inner = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        return outer {
+            ScrollView(vertical ? .vertical : .horizontal, showsIndicators: false) {
+                inner {
+                    ForEach(model.currentColors, id: \.self) { hex in
+                        Button { model.useColor(hex) } label: { colorDot(hex) }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) { model.deleteColor(hex) } label: {
+                                    Label("Delete color", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+                .padding(vertical ? .horizontal : .vertical, 2)
+            }
+            .frame(width: vertical ? nil : window, height: vertical ? window : nil)
+            Button { model.addCurrentColor() } label: {
+                Image(systemName: "plus.circle.dashed").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("addColor")
+        }
+    }
+
+    /// A saved-color swatch: a fixed-size dot (its size no longer encodes stroke width — color and
+    /// thickness are now independent) with an accent ring when it's the live pen color.
+    private func colorDot(_ hex: String) -> some View {
+        Circle()
+            .fill(Color(hex: hex) ?? .gray)
+            .frame(width: 24, height: 24)
+            .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.5))
+            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: model.isActiveColor(hex) ? 2.5 : 0))
+    }
+
+    /// Live pen color — a LIGHTWEIGHT button (not an always-rendered `ColorPicker`/`UIColorWell`, which is
+    /// expensive to reconcile every frame and made the dock drag stutter). Opens a popover with quick
+    /// swatches + the system color picker; the heavy picker only exists while the popover is open.
+    private var customColorPicker: some View {
+        Button { showColorPopover = true } label: {
+            Circle()
+                .fill(model.penColor)
+                .frame(width: 24, height: 24)
+                .overlay(Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1))
+                .overlay(Circle().strokeBorder(.secondary.opacity(0.4), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showColorPopover) { penColorPopover.presentationCompactAdaptation(.popover) }
+    }
+
+    private var penColorPopover: some View {
+        let cols = [GridItem(.adaptive(minimum: 38), spacing: 12)]
+        return VStack(alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: cols, spacing: 12) {
+                ForEach(DockBar.quickColors, id: \.self) { hex in
+                    Button { if let c = Color(hex: hex) { model.penColor = c } } label: {
+                        Circle().fill(Color(hex: hex) ?? .gray).frame(width: 34, height: 34)
+                            .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
+                            .overlay(Circle().strokeBorder(Color.accentColor,
+                                lineWidth: model.penColor.hexString?.caseInsensitiveCompare(hex) == .orderedSame ? 3 : 0))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            ColorPicker("Custom color", selection: $model.penColor, supportsOpacity: false)
+        }
+        .padding()
+        .frame(width: 260)
+    }
+
+    /// Three thickness presets shown as graduated dots (tap to select).
+    private var sizeDots: some View {
+        let layout = axis == .vertical ? AnyLayout(VStackLayout(spacing: 10))
+                                       : AnyLayout(HStackLayout(spacing: 10))
+        return layout {
+            ForEach(model.widthPresets, id: \.self) { w in
+                Button { model.penWidth = w } label: {
+                    Circle()
+                        .fill(model.penWidth == w ? Color.accentColor : Color.secondary)
+                        .frame(width: 6 + w, height: 6 + w)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// "Insert / Actions" — the decluttered home for the less-frequent actions (was loose in the bar).
+    private var insertMenu: some View {
+        Menu {
+            Button { model.onRecognize?() } label: { Label("Recognize", systemImage: "text.viewfinder") }
+            Button { model.onCheckWork?() } label: { Label("Check work", systemImage: "checkmark.seal") }
+                .accessibilityIdentifier("checkWork")
+            Button { model.onFitCurve?() } label: { Label("Fit graph", systemImage: "chart.xyaxis.line") }
+                .accessibilityIdentifier("fitCurve")
+            Divider()
+            Menu {
+                ForEach(PaperType.allCases) { p in
+                    Button { model.paper = p } label: { Label(p.label, systemImage: p.systemImage) }
+                }
+            } label: { Label("Paper", systemImage: "doc") }
+        } label: { Image(systemName: "plus.circle") }
+    }
+
+    /// A thin separator that runs ACROSS the dock — a vertical hairline in the horizontal bar, a
+    /// horizontal one when the bar is wall-docked vertical. (An explicit rect is predictable across the
+    /// `AnyLayout` axis switch, where a plain `Divider` doesn't reliably pick up the new orientation.)
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.3))
+            .frame(width: axis == .vertical ? 24 : 1, height: axis == .vertical ? 1 : 22)
+    }
+}
+
 /// Bridges the SwiftUI tool state to the UIKit canvas.
 private struct CanvasRepresentable: UIViewControllerRepresentable {
     @ObservedObject var model: CanvasModel
+    let notebookID: UUID
     var onStatus: (String) -> Void
 
     func makeUIViewController(context: Context) -> CanvasViewController {
         let vc = CanvasViewController()
+        vc.notebookID = notebookID   // set BEFORE the view loads so the lazy store/storage key off it
         vc.onStatus = onStatus
+        vc.onRecognized = { [weak model] draft in model?.pendingRecognition = draft }
         model.onUndo = { [weak vc] in vc?.performUndo() }
         model.onRedo = { [weak vc] in vc?.performRedo() }
         model.onAddSticky = { [weak vc] in vc?.addSticky() }
         model.onInsertResult = { [weak vc] t in vc?.insertResult(t) }
-        vc.apply(paper: model.paper, penColor: UIColor(model.penColor), penWidth: model.penWidth, tool: model.tool)
+        model.onRecognize = { [weak vc] in vc?.recognizeSelectionOrPage() }
+        model.onCheckWork = { [weak vc] in vc?.checkWork() }
+        model.onFitCurve = { [weak vc] in vc?.fitLassoedSketch() }
+        model.onInsertWidget = { [weak vc] kind in vc?.insertWidget(kind: kind) }
+        model.onMakeReal = { [weak vc] prompt in vc?.makeReal(prompt: prompt) }
+        model.onNextPage = { [weak vc] in vc?.goToNextPage() }
+        model.onPrevPage = { [weak vc] in vc?.goToPreviousPage() }
+        vc.onPageChanged = { [weak model] idx, count in
+            // Defer out of the SwiftUI update cycle — the canvas reports the initial page during its
+            // own layout, and publishing to `model` mid-update triggers the "Publishing changes from
+            // within view updates" warning.
+            DispatchQueue.main.async { model?.pageIndicator = count > 1 ? "\(idx)/\(count)" : "\(idx)" }
+        }
+        vc.apply(paper: model.paper, penColor: UIColor(model.penColor), penWidth: model.penWidth,
+                 tool: model.tool, fingerDrawing: model.fingerDrawing, autoCommands: model.autoCommands,
+                 snapShapesOnHold: model.snapShapesOnHold, makeRealSession: model.makeRealSession)
         return vc
     }
 
     func updateUIViewController(_ vc: CanvasViewController, context: Context) {
-        vc.apply(paper: model.paper, penColor: UIColor(model.penColor), penWidth: model.penWidth, tool: model.tool)
+        // `apply` is idempotent (early-returns when nothing changed), so the occasional extra call from a
+        // SwiftUI re-render is cheap.
+        vc.apply(paper: model.paper, penColor: UIColor(model.penColor), penWidth: model.penWidth,
+                 tool: model.tool, fingerDrawing: model.fingerDrawing, autoCommands: model.autoCommands,
+                 snapShapesOnHold: model.snapShapesOnHold, makeRealSession: model.makeRealSession)
     }
 }

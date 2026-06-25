@@ -26,3 +26,5 @@ node_modules/
 *.mobileprovision
 Secrets.xcconfig
 .env
+# App Info.plist holds the live MakeRealProxySecret (Railway proxy bearer token) — keep it local-only.
+InkLab/Info.plist

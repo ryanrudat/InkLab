@@ -185,6 +185,69 @@ final class DocumentTests: XCTestCase {
         }
     }
 
+    // MARK: - F2. HLC stays strictly monotonic across the 16-bit counter boundary
+    /// Regression: tick() used a WRAPPING counter (UInt16 `&+=`), so after 65,535 ops in one session
+    /// the next HLC was SMALLER than the first — corrupting fold's total order. tick() must now stay
+    /// strictly increasing past the wrap point (it advances the wall and resets the counter).
+    func test_F2_hlcMonotonicAcrossCounterWrap() {
+        let c = Clock(actor: UUID(), startWall: 1)
+        var prev = c.tick()
+        for _ in 0..<70_000 {              // well past UInt16.max (65,535)
+            let next = c.tick()
+            XCTAssertTrue(prev < next, "HLC must be strictly increasing across the counter-wrap boundary")
+            prev = next
+        }
+    }
+
+    // MARK: - G. Live-object state edits + promote (the make-real substrate) undo in one step
+    func test_G_liveStateEdit_undoesExactly() {
+        let nb = UUID(), page = UUID(), me = UUID()
+        let c = Clock(actor: me, startWall: 10)
+        let w = ObjectSnapshot(objectID: UUID(), kind: .widget, pageID: page, createdBy: me,
+                               payload: .widget(html: BlobRef(id: UUID(), kind: .widgetBundle, byteCount: 1),
+                                                jsState: "{\"display\":\"0\"}", sandboxPolicy: "native"))
+        let wid = w.objectID
+        let base = [op(c, nb, .addPage(meta: PageMeta(pageID: page, index: 0, extentY: 0))),
+                    op(c, nb, .addObject(snapshot: w))]
+        let baseProj = fold(base, notebookID: nb)
+
+        let edit = [op(c, nb, .setObjectState(objectID: wid, old: "{\"display\":\"0\"}", new: "{\"display\":\"42\"}"))]
+        let edited = fold(base + edit, notebookID: nb)
+        guard case .widget(_, let js, _)? = edited.pages[page]?.objects[wid]?.payload else { return XCTFail("widget payload") }
+        XCTAssertEqual(js, "{\"display\":\"42\"}", "setObjectState mutates jsState in place")
+
+        let uc = Clock(startWall: 1000)
+        let undo = edit.reversed().map { invert($0, txn: nil, using: uc) }
+        let afterUndo = fold(base + edit + undo, notebookID: nb)
+        XCTAssertEqual(afterUndo.pages[page]?.objects[wid], baseProj.pages[page]?.objects[wid],
+                       "undo of a state edit restores the object exactly (one step)")
+    }
+
+    func test_G2_promote_swapsPayloadAndKind_andUndoes() {
+        let nb = UUID(), page = UUID(), me = UUID()
+        let c = Clock(actor: me, startWall: 10)
+        let stickerPayload = ObjectPayload.sticker(image: BlobRef(id: UUID(), kind: .stickerPNG, byteCount: 5), vectorPDF: nil)
+        let s = ObjectSnapshot(objectID: UUID(), kind: .sticker, pageID: page, createdBy: me, payload: stickerPayload)
+        let sid = s.objectID
+        let base = [op(c, nb, .addPage(meta: PageMeta(pageID: page, index: 0, extentY: 0))),
+                    op(c, nb, .addObject(snapshot: s))]
+        let baseProj = fold(base, notebookID: nb)
+
+        // promote sticker → interactive widget (energy level up), identity preserved
+        let widgetPayload = ObjectPayload.widget(html: BlobRef(id: UUID(), kind: .widgetBundle, byteCount: 2), jsState: "{}", sandboxPolicy: "native")
+        let promote = [op(c, nb, .promote(objectID: sid, old: stickerPayload, new: widgetPayload))]
+        let promoted = fold(base + promote, notebookID: nb)
+        XCTAssertEqual(promoted.pages[page]?.objects[sid]?.kind, .widget, "promote keeps kind consistent with the new payload")
+        XCTAssertEqual(promoted.pages[page]?.objects[sid]?.objectID, sid, "identity is preserved across promote")
+        if case .widget? = promoted.pages[page]?.objects[sid]?.payload {} else { XCTFail("payload swapped to widget") }
+
+        let uc = Clock(startWall: 2000)
+        let undo = promote.reversed().map { invert($0, txn: nil, using: uc) }
+        let afterUndo = fold(base + promote + undo, notebookID: nb)
+        XCTAssertEqual(afterUndo.pages[page]?.objects[sid], baseProj.pages[page]?.objects[sid],
+                       "undo of a promote restores the original payload AND kind")
+    }
+
     // MARK: - F. Cross-notebook paste rewrites references consistently
     func test_F_crossNotebookPaste_remapsRefs() {
         let nb1 = UUID(), page = UUID(), me = UUID()

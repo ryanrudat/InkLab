@@ -28,6 +28,15 @@ final class ChemTests: XCTestCase {
         return nil
     }
 
+    /// Regression: a huge multi-species equation overflows the exact RREF arithmetic. It must degrade
+    /// to `.cannotBalance` (no crash), and ordinary equations must still balance correctly.
+    func test_balancerOverflowDegradesNeverTraps() {
+        let huge = "Ca74Li56B90Na13K75 + Li28Mg29 + Ca92F34Cr14K21 -> S94C92B91 + Mn2P45Li53C71Cl19 + Cr45Li74Zn31Cl41 + Mg87Na10V76Cr82N37 + Ti21Ne22Be95"
+        if case .cannotBalance = balance(huge) {} else { XCTFail("huge equation should be cannotBalance, not a crash/balance") }
+        // Sanity: normal equations still balance exactly after the overflow-safety change.
+        XCTAssertEqual(balanced("H2 + O2 -> H2O")?.pretty, "2 H2 + O2 -> 2 H2O")
+    }
+
     func test_balance_water() {
         XCTAssertEqual(balanced("H2 + O2 -> H2O")?.pretty, "2 H2 + O2 -> 2 H2O")
     }

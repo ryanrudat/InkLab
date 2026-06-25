@@ -198,6 +198,12 @@ public enum OpPayload: Sendable, Equatable, Codable {
     case removeEdge(edge: DependencyEdge)
     case addPage(meta: PageMeta)
     case setPageExtent(pageID: UUID, old: Double, new: Double)
+    /// Edit a live object's inline state string — `jsState` for `.widget`, `specJSON` for `.chart`,
+    /// `cameraJSON` for `.object3D`. Invertible by swapping old/new, so a widget edit undoes in one step.
+    case setObjectState(objectID: UUID, old: String, new: String)
+    /// Replace an object's payload in place (the §6 energy-level "promote": sticker ↔ interactive ↔ 3D),
+    /// preserving its identity/transform/z. Invertible by swapping old/new.
+    case promote(objectID: UUID, old: ObjectPayload, new: ObjectPayload)
 }
 
 public struct Op: Codable, Sendable, Equatable, Identifiable {

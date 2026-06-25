@@ -15,7 +15,10 @@ public func sampleFunction(_ formula: String, from a: Double, to b: Double, coun
     var points: [Point2D] = []
     for i in 0..<count {
         let x = a + (b - a) * Double(i) / Double(count - 1)
-        if let y = numericValue(expr, [v: x]) { points.append(Point2D(x: x, y: y)) }
+        // Skip undefined/non-finite points (asymptotes, NaN from an undefined domain) so a NaN never
+        // enters the table and poisons the downstream best-fit (numericValue is already finite-or-nil;
+        // the explicit isFinite is belt-and-suspenders).
+        if let y = numericValue(expr, [v: x]), y.isFinite { points.append(Point2D(x: x, y: y)) }
     }
     return points.isEmpty ? nil : points
 }
@@ -51,7 +54,9 @@ public func bestFit(_ points: [Point2D]) -> FitSummary? {
     if let f = polynomialFit(points, degree: 3) {
         candidates.append((FitSummary(kind: "cubic", rSquared: f.rSquared, equation: polyString(f.coefficients)), 4))
     }
-    let best = candidates.sorted { lhs, rhs in
+    // Disqualify any candidate whose R² is non-finite: NaN compares false to everything, so leaving it
+    // in would let it survive the sort and be returned as "best" purely by ordering.
+    let best = candidates.filter { $0.0.rSquared.isFinite }.sorted { lhs, rhs in
         if abs(lhs.0.rSquared - rhs.0.rSquared) > 1e-6 { return lhs.0.rSquared > rhs.0.rSquared }
         return lhs.complexity < rhs.complexity   // tie → prefer the simpler model
     }.first

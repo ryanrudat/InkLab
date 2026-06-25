@@ -51,10 +51,52 @@ If a mismatch involves opaque atoms it can't verify (e.g. `√2·√2 = 2`), the
   differentiation and integral steps (as above).
 - **Not yet:** transcendental identities (e.g. `sin²+cos²=1`), radical simplification, inequalities,
   actual equation *solving*, and multi-variable counterexamples (single real-variable only).
-  Coefficients use `Int` rationals — fine for student-scale steps; swap to a BigInt for very large
-  expansions.
+  Coefficients use `Int64` rationals — fine for student-scale steps; the exact core is now
+  **overflow-safe by construction** (see Status 2026-06-09), so very large expansions degrade to
+  `unsupported` rather than needing BigInt.
 
 ## Where it sits in the pipeline
 Fed by the recognizer's `FormalStructure` (LaTeX / expression tree) once a student selects their
 working; the verdict renders in place next to the ink (the "red pen"). Pure Swift, no iPad needed —
-`( cd Packages/InkLabMath && swift test )` → 21 tests (algebra + calculus).
+`( cd Packages/InkLabMath && swift test )` → 24 tests (algebra + calculus).
+
+---
+
+## Status (2026-06-08)
+The red-pen tutor (`InkLabMath` `checkChain` — first-wrong-line detection) is **reachable in the app**:
+via the **`@check`** command (typed or handwritten), the **engine chips on the recognition review
+sheet**, and the toolbar **Check** button (`CanvasViewController.checkWork()`, which reads the lassoed
+region — or the whole page's ink — then runs the tutor in place).
+
+The **reading** step now uses `bestRead`: when the cloud-AI opt-in is granted it reads the lasso via
+**Claude vision** through the backend proxy (it transcribes handwritten math and line breaks far better
+than on-device Vision), otherwise it falls back to **Apple Vision** on-device. Either way the **tutor
+judgment is unchanged** — `checkChain` runs the deterministic, exact-algebra red pen (correct-or-silent)
+on the transcribed text (one step per line). Only the *reading* can touch the cloud; **no LLM ever
+decides whether a step is right.**
+
+## Status (2026-06-09)
+The exact-arithmetic core (`Rational` / `Polynomial` + the `Expr` tokenizer) is now **overflow-safe**.
+It previously used trapping `Int`, so an input like `@check 2^100` or a long decimal could SIGTRAP the
+whole process. The core now uses **checked arithmetic with an absorbing overflow sentinel**: on `Int64`
+overflow the tutor degrades to **`.unsupported`** ("numbers too large to verify exactly") instead of
+crashing. This **strengthens correct-or-silent** — the earlier note ("swap to BigInt for very large
+expansions") is superseded: the engine is overflow-safe by construction. (A latent `Rational` ÷0 trap
+was fixed alongside it; regression tests added — `InkLabMath` is now **24 tests**.)
+
+Surface naming/reach: the **`@check`** / **Check** verb is now labeled **"Check work"** everywhere it
+appears, and it is reachable from the **lasso selection menu** (it acts on the lassoed selection).
+
+## Status (2026-06-25)
+No engine changes since 2026-06-09 — the red pen is stable. Verified current against the tree:
+`InkLabMath` is still **24 tests** (algebra + calculus), and the engine remains reachable three ways —
+the **`@check`** command (`CommandRunner` → `redPen`), the **"Check working"** chip on the recognition
+review sheet (`EngineKit.EngineAction.check` → `runEngine`), and the toolbar / lasso-menu **Check work**
+button (`CanvasViewController.checkWork()`). All three funnel transcribed text into the same
+deterministic `checkChain`. `checkWork()` still reads the region via `bestRead` (Claude vision when the
+cloud opt-in is granted, else on-device Apple Vision) and the **verdict is always the exact-algebra
+tutor** — no LLM decides correctness.
+
+(Unrelated to this engine: this session rewrote the canvas's floating dock — drag-jitter fix + side-wall
+vertical snapping — in `CanvasScreen.swift`. It touches none of the red-pen path.) The repo is now public
+at <https://github.com/ryanrudat/InkLab>.

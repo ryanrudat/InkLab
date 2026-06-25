@@ -1,6 +1,6 @@
 # ADR 0001 — Recognition provider
 
-**Status:** Accepted (spike-gated) · June 2026
+**Status:** Accepted (spike-gated) · 2026-06-06 (interim Vision + Claude stack wired 2026-06-07; MyScript spike still pending as of 2026-06-25)
 **Resolves:** Build brief §12 #1 (highest-priority open decision)
 
 ## Context
@@ -51,6 +51,53 @@ This recommendation is **conditional on the spike** (docs/recognition-spike-plan
 accuracy gate on a real messy-student corpus, plus a written MyScript on-device license quote and a
 written answer on §18.3. If either fails, the interface lets us flip `.math` to Claude-vision-primary
 in one registration line.
+
+## Implementation status (2026-06-07)
+
+Two of the planned providers are now wired behind the `InkRecognizer` protocol:
+
+- **Apple Vision** (on-device, free) — implemented in the app target as `VisionTextRecognizer`;
+  reads flat text.
+- **Claude vision** (cloud, via the proxy `/recognize` endpoint) — implemented as
+  `ClaudeVisionRecognizer`.
+
+Notable finding: **Apple Vision misreads a handwritten "@" as "a"**, while **Claude reads the "@"
+correctly (0.97 confidence)**. Because of this, the Recognize / auto-`@` path uses **Claude with
+Apple Vision as the offline/free fallback** — a swap made possible by the protocol abstraction, as
+the ADR intended.
+
+**MyScript** remains the planned on-device math provider but is **NOT yet integrated** (needs a paid
+license + their binary SDK the user must obtain). Structured math (exponents/fractions) therefore
+isn't available yet — both wired providers return flat text. **The spike (the gate above) is still
+pending.**
+
+## Implementation status (2026-06-08)
+
+The interim recognizer stack from 2026-06-07 is unchanged in shape — Apple Vision
+(`VisionTextRecognizer`, on-device) + Claude vision (`ClaudeVisionRecognizer`, cloud via the proxy,
+consent-gated per ADR 0002), both behind the `InkRecognizer` protocol; **MyScript primary is still a
+DEFERRED spike** (no license/SDK yet).
+
+New today: **recognition also powers handwrite-to-plot on generated widgets.** A `WidgetAnnotationView`
+ink layer sits above each make-real widget; the ƒ header button rasterises that annotation and runs it
+through the **same recognizer used by the Recognize button** (consent-gated, identical
+`InkRecognizer` path), then feeds the recognized text into the widget via the new widget input contract
+(`window.inklab.setInput(text)`, with a best-effort JS fallback in `WebWidgetView.setInput`). So the
+recognizer's "translate ink → formal/text, engines/widgets compute" boundary now extends onto live
+widgets — no change to the provider decision, just a new consumer of the existing path.
+
+## Implementation status (2026-06-09)
+
+The recognizer stack is **unchanged in shape** — Apple Vision (`VisionTextRecognizer`, on-device) +
+Claude vision (`ClaudeVisionRecognizer`, cloud via the proxy, consent-gated per ADR 0002), both
+behind the `InkRecognizer` protocol; **MyScript primary is still a DEFERRED spike** (no license/SDK
+yet). No provider decision change.
+
+New today: **recognition is now also reachable from the lasso SELECTION edit menu.** Recognize /
+Check / Fit act on a lassoed mixed selection of handwriting + objects, running the **same
+consent-gated `InkRecognizer` path** — so the recognizer's reach now extends to direct-manipulation
+selections, again just a new consumer of the existing path. Also: **"Check working" was renamed
+"Check work"** everywhere it appears.
 
 ## Consequences
 

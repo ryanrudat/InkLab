@@ -10,6 +10,9 @@ export interface AssembleOpts {
   userPrompt: string
   maxPasses?: number
   maxTokens?: number
+  model?: string
+  thinking?: { type: 'adaptive' | 'disabled' }
+  effort?: 'low' | 'medium' | 'high' | 'max'
 }
 
 export interface AssembleResult {
@@ -18,8 +21,13 @@ export interface AssembleResult {
   complete: boolean
 }
 
+// Remove ONLY the terminating marker (the model is instructed to END with it). Stripping every
+// occurrence would silently delete the literal marker text if a widget legitimately rendered it as
+// content (e.g. an HTML-tutorial widget).
 function stripMarker(s: string): string {
-  return s.split(DONE_MARKER).join('').trimEnd()
+  let out = s.trimEnd()
+  while (out.endsWith(DONE_MARKER)) out = out.slice(0, -DONE_MARKER.length).trimEnd()
+  return out
 }
 
 /// Multi-pass assembler: call the model, and while the response is truncated (no DONE marker and a
@@ -40,7 +48,7 @@ export async function assembleGeneration(client: AnthropicClient, opts: Assemble
           { role: 'user', content: `Continue exactly where you left off; do not repeat anything. End with ${DONE_MARKER}` },
         ]
 
-    const res = await client.complete({ system: opts.system, messages, maxTokens: opts.maxTokens })
+    const res = await client.complete({ system: opts.system, messages, maxTokens: opts.maxTokens, model: opts.model, thinking: opts.thinking, effort: opts.effort })
     accumulated += res.text
     passes++
 

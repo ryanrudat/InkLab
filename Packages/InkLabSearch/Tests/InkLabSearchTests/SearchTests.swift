@@ -19,6 +19,18 @@ final class SearchTests: XCTestCase {
         XCTAssertTrue(hits.allSatisfy { $0.doc.text.lowercased().contains("energy") })
     }
 
+    /// Regression: snippet generation used to mix indices from text.lowercased() into the original
+    /// text and crash when lowercasing changed length (Turkish "İ" → "i"+combining dot). The search +
+    /// snippet must complete without trapping and return a hit.
+    func test_snippetDoesNotCrashOnNonASCII() {
+        let idx = SearchIndex()
+        let leading = String(repeating: "İ ", count: 15)   // length-expanding-on-lowercase prefix
+        idx.add(doc("sticky", leading + "energy stored here"))
+        let hits = idx.search("energy")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertTrue(hits[0].snippet.lowercased().contains("energy"))
+    }
+
     func test_prefixMatching() {
         let idx = SearchIndex()
         idx.add(doc("sticky", "Photosynthesis"))

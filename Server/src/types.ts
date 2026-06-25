@@ -45,6 +45,8 @@ export interface CompleteOpts {
   messages: AnthropicMessage[]
   maxTokens?: number
   model?: string
+  thinking?: { type: 'adaptive' | 'disabled' }
+  effort?: 'low' | 'medium' | 'high' | 'max'
 }
 export interface AnthropicClient {
   complete(opts: CompleteOpts): Promise<AnthropicResponse>

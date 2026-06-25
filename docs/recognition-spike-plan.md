@@ -50,3 +50,69 @@ non-trivial, tighten the "Read as…" confirm UX.
   accuracy bar OR the license is too costly/restrictive OR §18.3 can't be constrained for minors.
 
 Either outcome is a one-line provider swap in the router — which is the entire point of the interface.
+
+---
+
+## Update (2026-06-08) — interim recognizer in place and now driving more of the app; MyScript spike still deferred
+
+The MyScript spike above is **DEFERRED until a MyScript license + SDK are obtained**. The rest of
+this plan still stands. In the meantime, recognition is wired with the providers we have today,
+**both behind the `InkRecognizer` protocol** (`ClaudeVisionRecognizer` + `VisionTextRecognizer`):
+
+- **Interim primary: Claude-vision** (cloud, via the proxy `/recognize`) — working end-to-end; reads
+  both handwriting and the `@` ask-marker correctly. Consent-gated: it fires only when the cloud-AI
+  opt-in is granted (`makeRealSession.blockReason == nil`); the server re-checks the session.
+- **On-device / offline fallback: Apple Vision** — kept for the key-free/offline path, but it proved
+  **unreliable for symbols** (it misreads a handwritten `@` as `a`), which is why the Recognize path
+  prefers Claude.
+
+Both providers are reached through one shared `bestRead(...)` path (try cloud when consented, else
+Apple Vision on-device), so every recognition surface in the app uses the same swappable stack:
+
+- **The Recognize button** (lasso → read → draft) — the original surface.
+- **The deterministic engine chips** — recognized text feeds the engines wired into the toolbar today
+  (InkLabMath Check working / Differentiate, InkLabUnits, InkLabChem Balance / Molar mass,
+  InkLabBio DNA→Protein / Punnett). (The InkLabFit "Fit" chip is the exception — it samples lasso
+  stroke points geometrically and needs **no** OCR/recognition at all.)
+- **Handwrite-to-plot on widgets (NEW 2026-06-08)** — the ✏️/ƒ chrome on a generated make-real
+  widget. Writing on the widget's annotation layer, then tapping **ƒ**, calls the same consent-gated
+  `bestRead(...)`, trims the read to a bare expression (`y = …`/`f(x) = …` → the RHS), and feeds it
+  into the widget via the widget input protocol (`window.inklab.setInput(text)`, with a best-effort
+  JS fallback). Same recognizer as the Recognize button — no second provider path.
+
+This is the NO-GO §5 posture (Claude-vision-primary) running provisionally as the default, pending the
+MyScript license/SDK and the on-real-ink accuracy spike — at which point the go/no-go gates above apply.
+
+---
+
+## Update (2026-06-09) — recognizer stack unchanged; one new reach surface
+
+The interim stack above is **unchanged**: Claude-vision primary (cloud, via the proxy, consent-gated),
+Apple Vision on-device fallback, MyScript spike still **deferred**. No change to the go/no-go plan.
+
+- **Recognize is now also reachable from the lasso selection edit menu** — tapping inside a lasso
+  selection offers Recognize (alongside Check work / Fit), all running the same shared `bestRead(...)`
+  path. Just one more surface on the existing swappable stack — no new provider path.
+- The **"Check working"** verb was renamed **"Check work"** on the lasso edit-menu and dock surfaces
+  (the engine chip noted in the 2026-06-08 update above is the same InkLabMath path; the legacy
+  `EngineKit` chip title and the recognition-review help text still read "Check working").
+
+---
+
+## Update (2026-06-25) — recognizer stack still unchanged; spike still the gate before MyScript
+
+No change to recognition since the 2026-06-09 update. Verified against the codebase today:
+
+- **Stack:** Claude-vision primary (cloud, via the proxy, consent-gated), Apple Vision on-device
+  fallback, MyScript still **deferred**. All three providers remain stubs in the package
+  (`MyScriptRecognizer` / `AppleVisionRecognizer` / `ClaudeVisionRecognizer` in
+  `InkLabRecognition/Providers` throw `.notImplemented`); the app's live readers are
+  `ClaudeVisionRecognizer` + `VisionTextRecognizer` in `InkLab/InkLab`, both behind `InkRecognizer`
+  and reached through the single `bestRead(...)` path in `CanvasViewController` (consent check is
+  `makeRealSession.blockReason == nil`).
+- The recent dock rewrite (drag in global coords + side-wall snap to a vertical reflow) is a
+  toolbar UX change only — it does **not** touch any recognition surface or provider path. Recognize
+  and Check work are still reached from the dock and the lasso edit menu, both running `bestRead(...)`.
+- Provisional posture is unchanged: this is the §5 **NO-GO (Claude-vision-primary)** path running as
+  the default, pending the MyScript license/SDK and the on-real-ink accuracy spike — at which point
+  the go/no-go gates in §3–§5 apply as written.

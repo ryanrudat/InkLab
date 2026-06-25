@@ -81,9 +81,12 @@ public final class SearchIndex {
     private func kindWeight(_ kind: String) -> Double { kind == "recognized" ? 1.5 : 1.0 }
 
     private func snippet(_ text: String, _ qTokens: [String]) -> String {
-        let lower = text.lowercased()
         for q in qTokens {
-            if let r = lower.range(of: q) {
+            // Match case-insensitively against the ORIGINAL text so the returned String.Index values are
+            // valid in `text`. (Searching `text.lowercased()` and reusing its indices crashed when
+            // lowercasing changed length — e.g. Turkish "İ" → "i"+combining-dot — making a `lower`
+            // index out of bounds in `text`.)
+            if let r = text.range(of: q, options: .caseInsensitive) {
                 let start = text.index(r.lowerBound, offsetBy: -20, limitedBy: text.startIndex) ?? text.startIndex
                 let end = text.index(r.upperBound, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
                 let prefix = start > text.startIndex ? "…" : ""

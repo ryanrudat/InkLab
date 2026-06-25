@@ -34,3 +34,11 @@ test('never-completing generation stops at maxPasses and reports incomplete', as
   assert.equal(r.passes, 3)
   assert.equal(r.output, 'xxx')
 })
+
+test('only the trailing DONE marker is stripped; an in-body marker is preserved', async () => {
+  const body = `<pre>end with ${DONE_MARKER}</pre> more html`
+  const c = mockClient([{ text: `${body} ${DONE_MARKER}`, stopReason: 'end_turn' }])
+  const r = await assembleGeneration(c, { system: 's', userPrompt: 'p' })
+  assert.equal(r.complete, true)
+  assert.equal(r.output, body)   // the literal marker inside <pre> survives; only the terminator is removed
+})

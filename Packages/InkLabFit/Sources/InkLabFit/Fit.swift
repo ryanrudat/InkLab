@@ -45,7 +45,8 @@ public func rSquared(_ points: [Point2D], predict: (Double) -> Double) -> Double
         let d = p.y - yBar; ssTot += d * d
     }
     if ssTot <= 1e-12 { return ssRes <= 1e-12 ? 1 : 0 }
-    return 1 - ssRes / ssTot
+    let r = 1 - ssRes / ssTot
+    return r.isFinite ? r : 0   // a non-finite input (NaN/Inf) collapses to "worst fit", never propagates
 }
 
 // MARK: - Fits

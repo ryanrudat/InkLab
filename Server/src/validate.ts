@@ -45,14 +45,34 @@ export function validateRecognition(raw: string): RecognitionResult {
   }
 }
 
-/// Basic safety check on a generated make-real widget: it must be self-contained (no external network
-/// loads), so it can run in a locked-down WKWebView. Returns the violations found (empty = safe).
+/// Best-effort, DEFENSE-IN-DEPTH safety scan of a generated make-real widget. It rejects the obvious
+/// external-load / exfiltration / navigation shapes so a malformed widget is caught before it ever
+/// reaches a device. It is NOT a complete allowlist and is NOT the security boundary: the real boundary
+/// is the on-device WKWebView lockdown (CSP `default-src 'none'`, nil baseURL, a navigation delegate
+/// that cancels every navigation, non-persistent store — see WebWidgetView), which is deny-by-default
+/// and independently blocks every vector below. This scan is a redundant tripwire. Empty = no obvious
+/// violation. (Matches absolute `https?://` AND protocol-relative `//host` references.)
 export function validateWidgetHtml(html: string): { safe: boolean; violations: string[] } {
   const violations: string[] = []
   const lower = html.toLowerCase()
-  if (/<script[^>]+src\s*=\s*["']https?:/i.test(html)) violations.push('external script src')
-  if (/<link[^>]+href\s*=\s*["']https?:/i.test(html)) violations.push('external stylesheet')
-  if (/\bfetch\s*\(\s*["']https?:/i.test(html) || /xmlhttprequest/i.test(lower)) violations.push('network request')
+  const URL = String.raw`["']?\s*(?:https?:)?\/\/`   // absolute or protocol-relative URL (quotes optional)
+  // External resource/navigation references in attributes.
+  if (new RegExp(`<script[^>]+src\\s*=\\s*${URL}`, 'i').test(html)) violations.push('external script src')
+  if (new RegExp(`<link[^>]+href\\s*=\\s*${URL}`, 'i').test(html)) violations.push('external stylesheet')
+  if (new RegExp(`(?:src|href|action|formaction|poster|data|xlink:href)\\s*=\\s*${URL}`, 'i').test(html)) {
+    violations.push('external resource url')
+  }
+  if (new RegExp(`url\\(\\s*${URL}`, 'i').test(lower)) violations.push('css external url')
+  if (/<base\b/i.test(lower)) violations.push('base tag')
+  if (/<meta[^>]+http-equiv\s*=\s*["']\s*refresh/i.test(html)) violations.push('meta refresh')
   if (/<iframe/i.test(lower)) violations.push('iframe')
+  if (/<frame\b/i.test(lower) || /<object\b/i.test(lower) || /<embed\b/i.test(lower)) violations.push('embedded object')
+  // Network / dynamic-load APIs (a self-contained offline widget needs none of these).
+  if (/\bfetch\s*\(/i.test(lower)) violations.push('fetch')
+  if (/xmlhttprequest/i.test(lower)) violations.push('XMLHttpRequest')
+  if (/\bwebsocket\b/i.test(lower)) violations.push('WebSocket')
+  if (/\beventsource\b/i.test(lower)) violations.push('EventSource')
+  if (/sendbeacon/i.test(lower)) violations.push('sendBeacon')
+  if (/\bimport\s*\(/i.test(lower)) violations.push('dynamic import')
   return { safe: violations.length === 0, violations }
 }
