@@ -99,17 +99,18 @@ final class ObjectOverlayView: UIView {
         guard rect.width > 1, rect.height > 1 else { return }
         let v = UIView(frame: rect)
         v.isUserInteractionEnabled = false
-        v.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.10)
-        v.layer.cornerRadius = 6
-        v.layer.borderColor = UIColor.systemBlue.withAlphaComponent(0.5).cgColor
+        v.backgroundColor = Theme.sun.withAlphaComponent(0.10)
+        v.layer.cornerRadius = 8
+        v.layer.cornerCurve = .continuous
+        v.layer.borderColor = Theme.sun.withAlphaComponent(0.55).cgColor
         v.layer.borderWidth = 1
         v.clipsToBounds = true
         let sweep = CAGradientLayer()
         sweep.frame = CGRect(x: 0, y: 0, width: 44, height: rect.height)
         sweep.startPoint = CGPoint(x: 0, y: 0.5); sweep.endPoint = CGPoint(x: 1, y: 0.5)
-        sweep.colors = [UIColor.systemBlue.withAlphaComponent(0).cgColor,
-                        UIColor.systemBlue.withAlphaComponent(0.45).cgColor,
-                        UIColor.systemBlue.withAlphaComponent(0).cgColor]
+        sweep.colors = [Theme.sun.withAlphaComponent(0).cgColor,
+                        Theme.sun.withAlphaComponent(0.40).cgColor,
+                        Theme.sun.withAlphaComponent(0).cgColor]
         v.layer.addSublayer(sweep)
         let anim = CABasicAnimation(keyPath: "position.x")
         anim.fromValue = -22
@@ -342,19 +343,21 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     init(objectID: UUID) {
         self.objectID = objectID
         super.init(frame: .zero)
-        layer.cornerRadius = 10
+        layer.cornerRadius = 14
+        layer.cornerCurve = .continuous
+        layer.shadowColor = UIColor(red: 0.30, green: 0.18, blue: 0.10, alpha: 1).cgColor   // warm, like the desert light
         layer.shadowOpacity = 0.15
-        layer.shadowRadius = 4
-        layer.shadowOffset = CGSize(width: 0, height: 2)
+        layer.shadowRadius = 6
+        layer.shadowOffset = CGSize(width: 0, height: 3)
 
         label.numberOfLines = 0
-        label.font = .systemFont(ofSize: 16)
+        label.font = Theme.ui(16)
 
-        header.backgroundColor = .secondarySystemFill
-        headerLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        headerLabel.textColor = .secondaryLabel
+        header.backgroundColor = Theme.cardBar
+        headerLabel.font = Theme.title(13)
+        headerLabel.textColor = Theme.inkSecondary
         header.addSubview(headerLabel)
-        footer.backgroundColor = .secondarySystemFill
+        footer.backgroundColor = Theme.cardBar
 
         // Drag: label objects drag from anywhere; widget objects drag only from their header.
         for g in [hostPan, headerPan] {
@@ -369,7 +372,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
         // Delete ✕ (top-right).
         deleteButton.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .bold)), for: .normal)
         deleteButton.tintColor = .white
-        deleteButton.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        deleteButton.backgroundColor = Theme.rgb(0x2E3542).withAlphaComponent(0.78)   // the dock's slate
         deleteButton.layer.cornerRadius = 13
         deleteButton.accessibilityLabel = "Delete"
         deleteButton.addAction(UIAction { [weak self] _ in
@@ -408,7 +411,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
         textView.isHidden = true
         textView.backgroundColor = .clear
         textView.textColor = .black
-        textView.font = .systemFont(ofSize: 16)
+        textView.font = Theme.ui(16)
         textView.delegate = self
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
         let bar = UIToolbar()
@@ -429,13 +432,13 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     /// On a widget card the grip lives in the footer bar, so it can be quiet; on a sticky/callout it floats
     /// over the card and needs a contrasting badge.
     private func styleResizeHandle(inFooter: Bool) {
-        resizeHandle.backgroundColor = inFooter ? .clear : UIColor.black.withAlphaComponent(0.45)
-        resizeGrip.tintColor = inFooter ? .secondaryLabel : .white
+        resizeHandle.backgroundColor = inFooter ? .clear : Theme.rgb(0x2E3542).withAlphaComponent(0.6)
+        resizeGrip.tintColor = inFooter ? Theme.slate : .white
     }
 
     private func configureChrome(_ b: UIButton, systemName: String, action: Selector) {
         b.setImage(UIImage(systemName: systemName, withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)), for: .normal)
-        b.tintColor = .secondaryLabel
+        b.tintColor = Theme.slate
         b.addTarget(self, action: action, for: .touchUpInside)
     }
 
@@ -468,12 +471,12 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     /// active by EITHER route (the toggle or the global Eraser tool), so a Pencil-erases state is visible.
     private func refreshAnnotationChrome() {
         guard let annotation else { return }
-        annotateButton.tintColor = annotation.isAnnotating ? .systemBlue : .secondaryLabel
-        eraseButton.tintColor = annotation.isErasing ? .systemRed : .secondaryLabel
+        annotateButton.tintColor = annotation.isAnnotating ? Theme.sun : Theme.slate
+        eraseButton.tintColor = annotation.isErasing ? Theme.rust : Theme.slate
         let erasing = annotation.isErasing || annotation.pencilErases
-        if erasing { header.backgroundColor = UIColor.systemRed.withAlphaComponent(0.18) }
-        else if annotation.isAnnotating { header.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.18) }
-        else { header.backgroundColor = .secondarySystemFill }
+        if erasing { header.backgroundColor = Theme.rust.withAlphaComponent(0.18) }
+        else if annotation.isAnnotating { header.backgroundColor = Theme.sun.withAlphaComponent(0.18) }
+        else { header.backgroundColor = Theme.cardBar }
     }
 
     /// ƒ: recognize the writing on the widget and feed it to the widget's input (handwrite → plot).
@@ -597,10 +600,10 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             // so a widget that leaves its background transparent never shows dark-mode black behind it.
             overrideUserInterfaceStyle = .light
             styleResizeHandle(inFooter: true)
-            backgroundColor = .systemBackground
+            backgroundColor = Theme.card
             clipsToBounds = true
-            layer.borderColor = UIColor.separator.cgColor
-            layer.borderWidth = 0.5
+            layer.borderColor = Theme.chrome.cgColor
+            layer.borderWidth = Theme.chromeWidth
             hostPan.isEnabled = false
             headerPan.isEnabled = true
         } else if kind.hasPrefix("native:"), let w = NativeWidgetRegistry.make(kind: String(kind.dropFirst("native:".count))) {
@@ -614,10 +617,10 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             addSubview(w)
             styleResizeHandle(inFooter: true)
             headerLabel.text = NativeWidgetRegistry.title(kind: String(kind.dropFirst("native:".count)))
-            backgroundColor = .systemBackground
+            backgroundColor = Theme.card
             clipsToBounds = true
-            layer.borderColor = UIColor.separator.cgColor
-            layer.borderWidth = 0.5
+            layer.borderColor = Theme.chrome.cgColor
+            layer.borderWidth = Theme.chromeWidth
             hostPan.isEnabled = false
             headerPan.isEnabled = true
         } else if kind == "tutor" {
@@ -677,23 +680,24 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
         case .sticky(let text, let colorHex):
             isSticky = true
             stickyText = text
-            backgroundColor = UIColor(hex: colorHex) ?? .systemYellow
-            label.textColor = .black
+            backgroundColor = UIColor(hex: colorHex) ?? Theme.sunYellow
+            label.textColor = Theme.rgb(0x1E2530)          // stickies are paper: always dark ink
             label.text = text.isEmpty ? "Sticky" : text
         case .recognized(let body):
-            backgroundColor = .secondarySystemBackground
-            label.textColor = .label
+            backgroundColor = Theme.sand
+            label.textColor = Theme.ink
             label.text = "Read as: \(body.readAs)"
         case .callout(let text, _, _):
-            backgroundColor = UIColor.systemBlue.withAlphaComponent(0.12)
-            layer.borderColor = UIColor.systemBlue.withAlphaComponent(0.4).cgColor
+            // Engine results wear steel (exact computation, like the city); the tutor wears the sun.
+            backgroundColor = Theme.steelTint
+            layer.borderColor = Theme.slate.withAlphaComponent(0.45).cgColor
             layer.borderWidth = 1
-            label.textColor = .label
-            label.font = .systemFont(ofSize: 16, weight: .medium)
+            label.textColor = Theme.ink
+            label.font = Theme.ui(16, .medium)
             label.text = text
         default:
-            backgroundColor = .secondarySystemBackground
-            label.textColor = .label
+            backgroundColor = Theme.card
+            label.textColor = Theme.ink
             label.text = "Object"
         }
     }

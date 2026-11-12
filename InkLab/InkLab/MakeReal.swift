@@ -27,7 +27,7 @@ struct MakeRealSession: Codable, Sendable, Equatable {
     /// instead of making a pointless network round-trip. The server re-enforces this (defence in depth).
     var blockReason: String? {
         if !isOnline { return "You’re offline — AI generation needs a connection." }
-        if !aiConsentGranted { return "Turn on “Allow AI generation” in Settings to use “@” (it sends your prompt to Anthropic)." }
+        if !aiConsentGranted { return "Turn on “Allow AI generation” in Settings to use “@” (it sends your prompt to OpenAI)." }
         if userKind == "minorUnconsented" { return "AI generation needs verifiable parental consent." }
         if (userKind == "minorConsented" || userKind == "schoolManaged") && !ageVerified {
             return "Age needs to be verified before AI generation."
@@ -151,4 +151,13 @@ struct ProxyMakeRealProvider: MakeRealProvider {
             return "Generator error (status \(status))."
         }
     }
+}
+
+/// The request to send when a generated widget failed its render check: the original ask plus what broke, so
+/// the model fixes the actual bug (most often an unescaped quote that stops the whole script from running).
+/// Kept well under the proxy's 2000-character prompt cap.
+func makeRealRetryPrompt(_ prompt: String, after health: RenderHealth) -> String {
+    let problem = String(health.problem.prefix(240))
+    return String(prompt.prefix(1500)) + "\n\n(A previous version of this widget failed in the browser: \(problem). "
+        + "Rebuild it so the JavaScript is valid and runs without errors; watch for unescaped quotes or apostrophes inside strings.)"
 }

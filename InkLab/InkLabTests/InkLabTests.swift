@@ -643,6 +643,56 @@ struct InkLabTests {
     }
 }
 
+/// Render check (hidden test render before a generated widget is placed): catches the failures that used to
+/// show a blank card. Real WebKit, same lockdown as the live renderer.
+struct WidgetRenderCheckTests {
+    private let size = CGSize(width: 360, height: 540)
+
+    @MainActor
+    @Test func catchesAScriptThatDoesNotParse() async {
+        // The real failure seen in testing: an apostrophe inside a single-quoted string kills the whole script.
+        let html = "<!DOCTYPE html><html><body><canvas id='c'></canvas><script>var label = 'the cell's nucleus'; draw();</script></body></html>"
+        let health = await WidgetRenderCheck.run(html: html, size: size, settle: .milliseconds(300))
+        #expect(!health.ok)
+        #expect(health.problem.contains("SyntaxError"))
+    }
+
+    @MainActor
+    @Test func catchesACrashInsideTheAnimationLoop() async {
+        // Off-screen there are no animation frames; the probe drives them so draw-loop errors still surface.
+        let html = "<!DOCTYPE html><html><body><p>Orbit</p><script>var n=0;function frame(){n++; if(n===3){ undefinedPlanet.move(); } requestAnimationFrame(frame);} requestAnimationFrame(frame);</script></body></html>"
+        let health = await WidgetRenderCheck.run(html: html, size: size, settle: .milliseconds(800))
+        #expect(!health.ok)
+        #expect(health.problem.contains("undefinedPlanet"))
+    }
+
+    @MainActor
+    @Test func passesAHealthyWidgetAndFlagsAnEmptyOne() async {
+        let good = "<!DOCTYPE html><html><body><canvas id='c' width='100' height='100'></canvas><script>var x=document.getElementById('c').getContext('2d'); function f(){x.fillRect(0,0,10,10); requestAnimationFrame(f);} requestAnimationFrame(f);</script></body></html>"
+        #expect(await WidgetRenderCheck.run(html: good, size: size, settle: .milliseconds(300)).ok)
+        let empty = await WidgetRenderCheck.run(html: "<!DOCTYPE html><html><body><div></div></body></html>", size: size, settle: .milliseconds(300))
+        #expect(!empty.ok)
+        #expect(empty.problem == "the widget showed nothing")
+    }
+
+    @Test func retryPromptCarriesTheErrorAndStaysUnderTheCap() {
+        let health = RenderHealth(errors: ["SyntaxError: Unexpected identifier 's' (line 40)"], visible: true)
+        let retry = makeRealRetryPrompt("animated cell", after: health)
+        #expect(retry.hasPrefix("animated cell"))
+        #expect(retry.contains("SyntaxError: Unexpected identifier 's'"))
+        #expect(makeRealRetryPrompt(String(repeating: "x", count: 5000), after: health).count < 2000)
+    }
+
+    @Test func probeRunsBeforeAnyWidgetScript() {
+        let doc = WidgetHTML.sandboxedDocument("<!DOCTYPE html><html><head><script>1</script></head></html>",
+                                               extraHead: WidgetRenderCheck.probeScript)
+        let csp = doc.range(of: "Content-Security-Policy")!.lowerBound
+        let probe = doc.range(of: "__inklabRenderErrors")!.lowerBound
+        let widget = doc.range(of: "<script>1</script>")!.lowerBound
+        #expect(csp < probe && probe < widget)
+    }
+}
+
 /// Awaits a WKWebView's first navigation.
 @MainActor
 private final class NavigationWaiter: NSObject, WKNavigationDelegate {

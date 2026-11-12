@@ -2,8 +2,22 @@ import type { AnthropicClient } from './types.ts'
 import { cloudEligible } from './consent.ts'
 import { assembleGeneration, DONE_MARKER } from './assembler.ts'
 import { extractWidgetHtml, validateWidgetHtml, widgetLayout } from './validate.ts'
+import { httpOpenAIClient } from './openai.ts'
 
-export const MAKE_REAL_MODEL = 'claude-opus-4-8'
+/// Default widget model: GPT-6.1 Sol (chosen 2026-11-12 after a head-to-head: comparable or better designs,
+/// ~$0.04/widget). Without OPENAI_API_KEY the proxy falls back to Claude so a deployment missing the key keeps
+/// working. MAKE_REAL_MODEL overrides both; any `gpt-…` id routes to OpenAI, anything else to Anthropic.
+/// Handwriting recognition (/recognize) stays on Claude, which read handwriting more accurately.
+export const MAKE_REAL_MODEL = 'gpt-6.1-sol'
+export const MAKE_REAL_FALLBACK_MODEL = 'claude-opus-4-8'
+
+export function configuredMakeRealModel(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.MAKE_REAL_MODEL?.trim()
+  if (override) return override
+  return env.OPENAI_API_KEY?.trim() ? MAKE_REAL_MODEL : MAKE_REAL_FALLBACK_MODEL
+}
+
+export const isOpenAIModel = (model: string) => /^gpt-/i.test(model)
 
 /// Whole-request budget across every pass. The app waits a little longer than this (MakeReal.swift
 /// `timeoutInterval`), so a slow generation ends as a clear 504 here instead of a client-side timeout
@@ -35,8 +49,9 @@ export const MAKE_REAL_SYSTEM_PROMPT = [
   '- Everything must fit with no scrolling at the declared size. Size <canvas> and SVG drawings from the current viewport and redraw them on window resize.',
   '',
   'Look and feel',
-  '- Clean, modern, light design. Always set an explicit background color on body and explicit text colors; the card is always shown in light mode.',
-  '- Use the system font stack (-apple-system, system-ui, sans-serif), clear visual hierarchy, consistent spacing, and one accent color.',
+  '- Clean, modern, light design that matches the InkLab notebook (calm, mid-century, warm). Always set an explicit background color on body and explicit text colors; the card is always shown in light mode.',
+  '- Palette: background warm cream #FFFBF6, panels #F7ECDF, text charcoal #1E2530, secondary text #85867F, thin borders #DCD2C6. The one accent is sun orange #E8742F (primary buttons, the active state, the key result); steel #5F6B7A for secondary controls; rust #C2452A only for errors. Charts and diagrams may add steel blue #3D6FA3, sage #4E8A5E and mustard #E2A93B for data.',
+  '- Type: ui-rounded, -apple-system, system-ui, sans-serif for the interface; headings may use Futura, "Avenir Next", sans-serif (installed fonts, nothing to load). Soft corners (10-14 px), clear visual hierarchy, consistent spacing.',
   '- The app shows your <title> in a header bar above the card. Give the document a short <title> (2-4 words) and do not spend space on a large heading that repeats it.',
   '- Design for touch: tap targets at least 40 px, no hover-only interactions.',
   '',
@@ -54,6 +69,10 @@ export interface MakeRealOptions {
   /** Cancels generation when the downstream client disconnects. */
   signal?: AbortSignal
   deadlineMs?: number
+  /** Overrides `MAKE_REAL_MODEL` (tests). */
+  model?: string
+  /** Client for `gpt-…` models (tests inject a mock; default is the real OpenAI client). */
+  openaiClient?: AnthropicClient
 }
 
 /// make-real orchestration: gate the session, generate (multi-pass), keep only the HTML document, and
@@ -75,13 +94,19 @@ export async function handleMakeReal(
   const timer = setTimeout(() => deadline.abort(), deadlineMs)
   const signal = opts.signal ? AbortSignal.any([opts.signal, deadline.signal]) : deadline.signal
 
+  const model = opts.model ?? configuredMakeRealModel()
+  const openai = isOpenAIModel(model)
+  const generator = openai ? (opts.openaiClient ?? httpOpenAIClient()) : client
+
   let gen
   try {
-    gen = await assembleGeneration(client, {
+    gen = await assembleGeneration(generator, {
       system: MAKE_REAL_SYSTEM_PROMPT,
       userPrompt: `Build this widget: ${prompt}`,
-      model: MAKE_REAL_MODEL,   // Opus for best widget quality (user request)
-      maxTokens: 8192,          // high enough that most widgets finish in ONE pass
+      model,
+      // One pass for most widgets. GPT reasoning tokens count toward its output cap, so give it room.
+      maxTokens: openai ? 16000 : 8192,
+      ...(openai ? { effort: 'medium' as const } : {}),
       timeoutMs: deadlineMs,    // one long pass may use the whole budget; `deadline` bounds the total
       signal,
     })
@@ -100,5 +125,5 @@ export async function handleMakeReal(
   if (!html) return { status: 502, body: { error: 'no widget' } }
   const safety = validateWidgetHtml(html)
   if (!safety.safe) return { status: 422, body: { error: 'unsafe widget', violations: safety.violations } }
-  return { status: 200, body: { html, layout: widgetLayout(html), complete: true, passes: gen.passes } }
+  return { status: 200, body: { html, layout: widgetLayout(html), complete: true, passes: gen.passes, model } }
 }

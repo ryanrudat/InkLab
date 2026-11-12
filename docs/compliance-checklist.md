@@ -36,6 +36,18 @@ Items marked 🔴 require legal counsel.
       ship. The tutor's answer-leak guard and "stay on the math problem" prompt are **not** moderation.
 - [ ] Design for **30-day retention** as the fallback (don't assume ZDR is granted).
 
+## OpenAI (widget generation, added 2026-11-12)
+`/make-real` now defaults to OpenAI's `gpt-6.1-sol` when `OPENAI_API_KEY` is set (Claude is the fallback,
+and handwriting recognition stays on Claude). OpenAI receives the student's **prompt text** (not ink), so it
+is a second third-party AI recipient. 🔴 **Before any minor uses widget generation through OpenAI:**
+- [ ] Review OpenAI's business terms, DPA and usage policies as they apply to **minors / education**;
+      confirm whether **zero data retention** is available and what the default retention is.
+- [ ] Data residency / region for minors' prompts; record the decision alongside ADR 0002.
+- [ ] Privacy policy + App Store disclosure name **OpenAI** as a recipient (the in-app consent text in
+      `SettingsView` was updated to say widgets go to OpenAI and handwriting to Anthropic).
+- [ ] Input/output **moderation** covers the OpenAI path too (the same "Organizations Serving Minors" bar).
+- [ ] ADR 0002 / ADR 0003 updated to name both providers (they currently assume Anthropic only).
+
 ## Architecture
 - [ ] **Server-side backend proxy** for all Claude calls (key off-device, ZDR-eligible, moderation).
 - [ ] **Data minimization**: crop to the minimal ink region; strip identifiers where feasible.

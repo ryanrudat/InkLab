@@ -46,15 +46,28 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     init() {
         if let data = try? Data(contentsOf: Self.storeURL),
            let saved = try? JSONDecoder().decode([Notebook].self, from: data) {
-            notebooks = saved
+            notebooks = saved.map(Self.retheme)
         } else {
             notebooks = [
-                Notebook(title: "Physics", paper: .grid, colorHex: "#4F9DFF"),
-                Notebook(title: "Calculus", paper: .ruled, colorHex: "#FFB020"),
-                Notebook(title: "Chemistry", paper: .dotted, colorHex: "#34C759"),
+                Notebook(title: "Physics", paper: .grid, colorHex: "#5F7A8F"),
+                Notebook(title: "Calculus", paper: .ruled, colorHex: "#E8742F"),
+                Notebook(title: "Chemistry", paper: .dotted, colorHex: "#7E9B86"),
             ]
             save()   // seed once so these ids are fixed from here on
         }
+    }
+
+    /// Covers still wearing one of the old built-in defaults move to the matching desert-poster color, so a
+    /// library made before the redesign reads as one set. Colors picked with the custom picker are kept.
+    private static let oldDefaults: [String: String] = [
+        "#4F9DFF": "#5F7A8F", "#FFB020": "#E2A93B", "#34C759": "#7E9B86", "#FF6482": "#B66A7E", "#AF52DE": "#3E4A5C",
+        "#FF9F0A": "#E8742F", "#30B0C7": "#5F7A8F", "#FF3B30": "#C2452A", "#5856D6": "#3E4A5C",
+    ]
+    private static func retheme(_ n: Notebook) -> Notebook {
+        guard let mapped = oldDefaults[n.colorHex.uppercased()] else { return n }
+        var n = n
+        n.colorHex = mapped
+        return n
     }
 
     private func save() {
@@ -62,7 +75,7 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     }
 
     func addNotebook(paper: PaperType = .ruled) -> Notebook {
-        let palette = ["#4F9DFF", "#FFB020", "#34C759", "#FF6482", "#AF52DE", "#FF9F0A"]
+        let palette = Theme.coverPalette
         let n = Notebook(title: "Untitled", paper: paper, colorHex: palette[notebooks.count % palette.count])
         notebooks.append(n)   // didSet persists
         return n
@@ -82,8 +95,7 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     }
 
     /// Curated cover colors offered in the recolor sheet (plus a system color picker for custom).
-    static let palette: [String] = ["#4F9DFF", "#FFB020", "#34C759", "#FF6482", "#AF52DE",
-                                    "#FF9F0A", "#30B0C7", "#FF3B30", "#5856D6", "#8E8E93"]
+    static let palette: [String] = Theme.coverPalette + ["#D9A07A", "#8E8E93"]
 
     func setColor(_ id: UUID, _ hex: String) {
         guard let i = notebooks.firstIndex(where: { $0.id == id }) else { return }

@@ -7,8 +7,10 @@ final class MakeRealShot: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // Open the first notebook (top-left cover).
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.13, dy: 0.20)).tap()
+        // Open the first notebook (top-left cover; found by id, since the Home header moves it).
+        let firstCover = app.buttons.matching(identifier: "notebookCover").firstMatch
+        XCTAssertTrue(firstCover.waitForExistence(timeout: 10))
+        firstCover.tap()
         Thread.sleep(forTimeInterval: 1.0)
 
         // Reveal the "@" command bar and run a make-real request.

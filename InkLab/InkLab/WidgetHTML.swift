@@ -65,15 +65,17 @@ enum WidgetHTML {
     /// the policy, and a missing or late doctype can't drop the page into quirks mode. (The widget's own
     /// `<html>`/`<head>` tags that follow are merged into the implied ones by the HTML parser.) A body-level
     /// fragment is wrapped in our own document.
-    static func sandboxedDocument(_ raw: String) -> String {
+    /// `extraHead` is placed right after the CSP, ahead of the widget's own markup (the render check uses it to
+    /// install its error collector before any widget script runs).
+    static func sandboxedDocument(_ raw: String, extraHead: String = "") -> String {
         let html = extractDocument(raw)
         if html.range(of: #"^(<!doctype\s+html|<html[\s>])"#, options: [.regularExpression, .caseInsensitive]) != nil {
             let body = html.replacingOccurrences(of: #"^<!doctype[^>]*>"#, with: "",
                                                  options: [.regularExpression, .caseInsensitive])
-            return "<!doctype html>\(injectedHead)\(body)"
+            return "<!doctype html>\(injectedHead)\(extraHead)\(body)"
         }
         return """
-        <!doctype html><html><head><meta charset="utf-8">\(injectedHead)
+        <!doctype html><html><head><meta charset="utf-8">\(injectedHead)\(extraHead)
         <style>html,body{margin:0;padding:10px;font-family:-apple-system,system-ui,sans-serif;color:#111;background:#fff;-webkit-text-size-adjust:100%;}*{box-sizing:border-box;}</style>
         </head><body>\(html)</body></html>
         """

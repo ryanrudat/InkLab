@@ -7,7 +7,9 @@ final class StickyEditShot: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.13, dy: 0.20)).tap()   // open first notebook
+        let firstCover = app.buttons.matching(identifier: "notebookCover").firstMatch
+        XCTAssertTrue(firstCover.waitForExistence(timeout: 10))
+        firstCover.tap()   // open first notebook
         Thread.sleep(forTimeInterval: 1.0)
 
         let addSticky = app.buttons["addSticky"]

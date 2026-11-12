@@ -116,8 +116,10 @@ final class CalculatorWidgetView: UIView, NativeWidgetView {
     // MARK: Layout
 
     private func build() {
-        backgroundColor = .systemBackground
-        display.font = .monospacedDigitSystemFont(ofSize: 30, weight: .regular)
+        backgroundColor = Theme.card
+        let digits = UIFont.monospacedDigitSystemFont(ofSize: 30, weight: .regular)
+        display.font = digits.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: 30) } ?? digits
+        display.textColor = Theme.ink
         display.textAlignment = .right
         display.text = "0"
         display.adjustsFontSizeToFitWidth = true
@@ -164,10 +166,21 @@ final class CalculatorWidgetView: UIView, NativeWidgetView {
     private func makeButton(_ key: String) -> UIButton {
         let b = UIButton(type: .system)
         b.setTitle(key, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 18)
-        b.backgroundColor = ["÷", "×", "−", "+", "="].contains(key)
-            ? UIColor.systemBlue.withAlphaComponent(0.14)
-            : UIColor.secondarySystemBackground
+        b.titleLabel?.font = Theme.ui(18, .medium)
+        // Poster keys: "=" is the sun, operators are sun-tinted, functions are steel, digits are paper.
+        let functions: Set = ["sin", "cos", "tan", "√", "ln", "log", "^", "π", "(", ")"]
+        switch key {
+        case "=":
+            b.backgroundColor = Theme.sun; b.tintColor = Theme.onSun
+        case "÷", "×", "−", "+":
+            b.backgroundColor = Theme.sun.withAlphaComponent(0.16); b.tintColor = Theme.sun
+        case "C", "⌫":
+            b.backgroundColor = Theme.cardBar; b.tintColor = Theme.rust
+        case _ where functions.contains(key):
+            b.backgroundColor = Theme.steelTint; b.tintColor = Theme.slate
+        default:
+            b.backgroundColor = Theme.cardBar; b.tintColor = Theme.ink
+        }
         b.addAction(UIAction { [weak self] _ in self?.press(key) }, for: .touchUpInside)
         b.accessibilityLabel = accessibilityName(key)
         return b

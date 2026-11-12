@@ -12,12 +12,19 @@ struct HomeView: View {
     @State private var recoloring: Notebook?
     @State private var renaming: Notebook?
     @State private var newName = ""
+    @State private var contentWidth: CGFloat = 800
+    @State private var scrollOffset: CGFloat = 0
 
     private let columns = [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 24)]
 
     var body: some View {
         NavigationStack {
             ScrollView {
+                DesertHeader(notebookCount: library.notebooks.count, scrollOffset: scrollOffset)
+                    .frame(height: DesertFrame.height(forWidth: contentWidth))
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
                 LazyVGrid(columns: columns, spacing: 28) {
                     ForEach(library.notebooks) { notebook in
                         NavigationLink(value: notebook) {
@@ -25,6 +32,7 @@ struct HomeView: View {
                                 .opacity(dragging?.id == notebook.id ? 0.4 : 1)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("notebookCover")
                         .onDrag {
                             dragging = notebook                                   // long-press to start reordering
                             return NSItemProvider(object: notebook.id.uuidString as NSString)
@@ -42,13 +50,19 @@ struct HomeView: View {
                 .padding(24)
                 .animation(.default, value: library.notebooks)
             }
-            .navigationTitle("InkLab")
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+                scrollOffset = y
+            }
+            .background(Color.inkPaper.ignoresSafeArea())
+            .navigationTitle("InkLab")                         // the back button's label; the header shows the name
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: Notebook.self) { notebook in
                 CanvasScreen(notebook: notebook)
                     .navigationTitle(notebook.title)
                     .navigationBarTitleDisplayMode(.inline)
             }
             .toolbar {
+                ToolbarItem(placement: .principal) { Text("").accessibilityHidden(true) }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { _ = library.addNotebook(paper: settings.defaultPaper) } label: { Image(systemName: "plus") }
                         .accessibilityIdentifier("newNotebook")
@@ -95,7 +109,7 @@ private struct NotebookCover: View {
 
             // Title written on a subtle "label" plaque.
             Text(notebook.title.isEmpty ? "Untitled" : notebook.title)
-                .font(.headline.weight(.semibold))
+                .font(.custom("Futura-Medium", size: 17, relativeTo: .headline))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)

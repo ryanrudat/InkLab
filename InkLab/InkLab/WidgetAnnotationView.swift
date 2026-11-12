@@ -23,7 +23,7 @@ final class WidgetAnnotationView: UIView {
     private(set) var strokes: [[CGPoint]] = []
     private var active: [CGPoint] = []
     private var activeErases = false                 // the in-flight touch is an erase, not a draw
-    private let displayColor = UIColor.systemRed
+    private let displayColor = Theme.rust
     private let lineWidth: CGFloat = 2.5
     private let eraseRadius: CGFloat = 16             // a touch within this of a stroke rubs the whole stroke out
 

@@ -82,16 +82,24 @@ struct CanvasScreen: View {
 
     private var commandBar: some View {
         HStack(spacing: 10) {
-            Image(systemName: "at").foregroundStyle(.secondary)
+            Image(systemName: "at").font(.body.weight(.bold)).foregroundStyle(Color.inkSun)
             TextField("@a clock  ·  @a pendulum  ·  @scientific calculator      (engines: @balance · @molar · @check)", text: $command)
+                .font(.inkUI(16))
                 .focused($commandFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .onSubmit(runCmd)
-            Button("Run", action: runCmd).disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Run", action: runCmd)
+                .font(.inkUI(15, .semibold))
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(Color.inkSun)
+                .disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.inkCard, in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).strokeBorder(Color.inkChrome, lineWidth: Theme.chromeWidth))
+        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
         .padding(.horizontal, 12).padding(.top, 8)
     }
 
@@ -116,11 +124,13 @@ struct CanvasScreen: View {
 
     private func statusToast(_ s: String) -> some View {
         Text(s)
-            .font(.callout)
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(radius: 3)
-            .padding(.bottom, 80)
+            .font(.inkUI(15, .medium))
+            .foregroundStyle(DockStyle.icon)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(DockStyle.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(DockStyle.rim, lineWidth: 1))
+            .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
+            .padding(.bottom, 120)                    // clear of the dock at its default spot
             .transition(.opacity)
     }
 
@@ -129,7 +139,7 @@ struct CanvasScreen: View {
             .font(.callout.weight(.semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Color.red.opacity(0.92), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.inkRust, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
             .shadow(radius: 4)
             .padding(.horizontal, 16).padding(.top, 12)
             .accessibilityIdentifier("persistenceWarning")
@@ -202,10 +212,9 @@ private struct FloatingDock: View {
                 DockBar(model: model, axis: axis)   // stable input → NOT rebuilt while dragging
             }
             .font(.title3)
-            .foregroundStyle(.primary)
+            .foregroundStyle(DockStyle.icon)
             .padding(.horizontal, 16).padding(.vertical, 12)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(radius: 5, y: 2)
+            .dockSurface()
         }
     }
 
@@ -213,12 +222,11 @@ private struct FloatingDock: View {
     private func puck(_ geo: GeometryProxy) -> some View {
         HStack(spacing: 6) {
             Image(systemName: model.tool.systemImage)
-            Image(systemName: "chevron.up").font(.caption2).foregroundStyle(.secondary)
+            Image(systemName: "chevron.up").font(.caption2).foregroundStyle(DockStyle.dim)
         }
-        .font(.title3).foregroundStyle(.primary)
+        .font(.title3).foregroundStyle(DockStyle.icon)
         .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(radius: 5, y: 2)
+        .dockSurface()
         .contentShape(Capsule())
         .onTapGesture { withAnimation(.spring(duration: 0.3)) { model.dockCollapsed = false } }
         // Larger slop on the puck: it ALSO taps-to-expand, so only a deliberate move should start a drag —
@@ -231,7 +239,7 @@ private struct FloatingDock: View {
     /// makes it easy to grab; small slop so it starts dragging immediately (the grip has no competing tap).
     private func grip(_ geo: GeometryProxy) -> some View {
         Image(systemName: "line.3.horizontal")
-            .font(.body).foregroundStyle(.secondary)
+            .font(.body).foregroundStyle(DockStyle.dim)
             .padding(6)
             .contentShape(Rectangle())
             .gesture(dockDrag(geo, minDistance: 2))
@@ -322,15 +330,20 @@ private struct DockBar: View {
     var axis: Axis
     @State private var showColorPopover = false
 
-    private static let quickColors = ["#1C1C1E", "#4F9DFF", "#FF3B30", "#34C759", "#FF9F0A", "#AF52DE", "#00C7BE", "#FFFFFF"]
+    private static let quickColors = ["#1E2530", "#3D6FA3", "#C2452A", "#4E8A5E", "#E8742F", "#7E5AA6", "#2E8C86", "#FFFFFF"]
 
     var body: some View {
-        let layout = axis == .vertical ? AnyLayout(VStackLayout(spacing: 14))
-                                       : AnyLayout(HStackLayout(spacing: 14))
+        let layout = axis == .vertical ? AnyLayout(VStackLayout(spacing: 11))
+                                       : AnyLayout(HStackLayout(spacing: 11))
         layout {
             ForEach(CanvasTool.allCases) { tool in
-                Button { model.tool = tool } label: { Image(systemName: tool.systemImage) }
-                    .foregroundStyle(model.tool == tool ? Color.accentColor : .secondary)
+                // The active tool sits on a small sun disc; the rest are quiet steel.
+                Button { model.tool = tool } label: {
+                    // The disc is a background, so it doesn't widen the dock (it spills into the spacing).
+                    Image(systemName: tool.systemImage)
+                        .foregroundStyle(model.tool == tool ? Color.white : DockStyle.dim)
+                        .background(Circle().fill(model.tool == tool ? Color.inkSun : Color.clear).frame(width: 36, height: 36))
+                }
             }
             // Color + thickness appear ONLY for the drawing tools (contextual — like GoodNotes/Notability).
             // Colors (scrollable strip + current/custom picker) are grouped together and kept SEPARATE
@@ -354,7 +367,7 @@ private struct DockBar: View {
             divider
             Button { model.onPrevPage?() } label: { Image(systemName: axis == .vertical ? "chevron.up" : "chevron.left") }
                 .accessibilityIdentifier("prevPage")
-            Text(model.pageIndicator).font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 22)
+            Text(model.pageIndicator).font(.inkUI(15, .medium).monospacedDigit()).foregroundStyle(DockStyle.dim).frame(minWidth: 22)
             Button { model.onNextPage?() } label: { Image(systemName: axis == .vertical ? "chevron.down" : "chevron.right") }
                 .accessibilityIdentifier("nextPage")
             divider
@@ -394,7 +407,7 @@ private struct DockBar: View {
             }
             .frame(width: vertical ? nil : window, height: vertical ? window : nil)
             Button { model.addCurrentColor() } label: {
-                Image(systemName: "plus.circle.dashed").foregroundStyle(.secondary)
+                Image(systemName: "plus.circle.dashed").foregroundStyle(DockStyle.dim)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("addColor")
@@ -408,7 +421,7 @@ private struct DockBar: View {
             .fill(Color(hex: hex) ?? .gray)
             .frame(width: 24, height: 24)
             .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.5))
-            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: model.isActiveColor(hex) ? 2.5 : 0))
+            .overlay(Circle().strokeBorder(Color.inkSun, lineWidth: model.isActiveColor(hex) ? 2.5 : 0))
     }
 
     /// Live pen color — a LIGHTWEIGHT button (not an always-rendered `ColorPicker`/`UIColorWell`, which is
@@ -434,7 +447,7 @@ private struct DockBar: View {
                     Button { if let c = Color(hex: hex) { model.penColor = c } } label: {
                         Circle().fill(Color(hex: hex) ?? .gray).frame(width: 34, height: 34)
                             .overlay(Circle().strokeBorder(.secondary.opacity(0.35), lineWidth: 0.5))
-                            .overlay(Circle().strokeBorder(Color.accentColor,
+                            .overlay(Circle().strokeBorder(Color.inkSun,
                                 lineWidth: model.penColor.hexString?.caseInsensitiveCompare(hex) == .orderedSame ? 3 : 0))
                     }
                     .buttonStyle(.plain)
@@ -444,6 +457,7 @@ private struct DockBar: View {
         }
         .padding()
         .frame(width: 260)
+        .foregroundStyle(.primary)          // the dock's light-on-slate foreground doesn't belong in the popover
     }
 
     /// Three thickness presets shown as graduated dots (tap to select).
@@ -454,7 +468,7 @@ private struct DockBar: View {
             ForEach(model.widthPresets, id: \.self) { w in
                 Button { model.penWidth = w } label: {
                     Circle()
-                        .fill(model.penWidth == w ? Color.accentColor : Color.secondary)
+                        .fill(model.penWidth == w ? Color.inkSun : DockStyle.dim)
                         .frame(width: 6 + w, height: 6 + w)
                 }
                 .buttonStyle(.plain)
@@ -492,8 +506,26 @@ private struct DockBar: View {
     /// `AnyLayout` axis switch, where a plain `Divider` doesn't reliably pick up the new orientation.)
     private var divider: some View {
         Rectangle()
-            .fill(Color.secondary.opacity(0.3))
+            .fill(DockStyle.divider)
             .frame(width: axis == .vertical ? 24 : 1, height: axis == .vertical ? 1 : 22)
+    }
+}
+
+/// The dock's look: a slate capsule (the poster city's steel) with dome-white icons, a steel rim, and a
+/// sun disc behind the active tool. The status toast wears the same surface.
+enum DockStyle {
+    static let surface = Color(uiColor: Theme.dynamic(0x2E3542, 0x2B3447))
+    static let rim = Color(uiColor: Theme.dynamic(0x4B5464, 0x48536B))
+    static let icon = Color(rgb: 0xEFEAE6)
+    static let dim = Color(rgb: 0xA6AFBA)
+    static let divider = Color.white.opacity(0.16)
+}
+
+private extension View {
+    func dockSurface() -> some View {
+        background(DockStyle.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(DockStyle.rim, lineWidth: 1))
+            .shadow(color: .black.opacity(0.22), radius: 8, y: 4)
     }
 }
 

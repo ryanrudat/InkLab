@@ -34,7 +34,7 @@ final class WebWidgetView: UIView, WKNavigationDelegate, WKUIDelegate, UIGesture
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .secondarySystemBackground
+        backgroundColor = Theme.card
         clipsToBounds = true
 
         snapshotView.contentMode = .scaleAspectFill
@@ -43,8 +43,8 @@ final class WebWidgetView: UIView, WKNavigationDelegate, WKUIDelegate, UIGesture
         addSubview(snapshotView)
 
         placeholderLabel.text = "Tap to resume widget"
-        placeholderLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        placeholderLabel.textColor = .secondaryLabel
+        placeholderLabel.font = Theme.ui(13, .medium)
+        placeholderLabel.textColor = Theme.inkSecondary
         placeholderLabel.textAlignment = .center
         placeholderLabel.isUserInteractionEnabled = false
         addSubview(placeholderLabel)

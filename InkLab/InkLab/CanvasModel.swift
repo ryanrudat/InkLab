@@ -30,7 +30,7 @@ struct RecognitionDraft: Identifiable, Sendable {
 /// view controller by closures (set when the canvas is created).
 @MainActor final class CanvasModel: ObservableObject {
     @Published var paper: PaperType
-    @Published var penColor: Color = Color(hex: "#1C1C1E") ?? .primary
+    @Published var penColor: Color = Color(hex: "#1E2530") ?? .primary
     @Published var penWidth: CGFloat = 6
     @Published var tool: CanvasTool = .pen
     /// Whether the floating dock is collapsed to its puck. Lives here (not in the SwiftUI view) so the
@@ -78,8 +78,9 @@ struct RecognitionDraft: Identifiable, Sendable {
         if let data = UserDefaults.standard.data(forKey: colorsKey),
            let d = try? JSONDecoder().decode([String: [String]].self, from: data), !d.isEmpty { return d }
         return [
-            CanvasTool.pen.rawValue: ["#1C1C1E", "#4F9DFF", "#FF3B30", "#34C759", "#FF9F0A", "#AF52DE"],
-            CanvasTool.highlighter.rawValue: ["#FFE680", "#9CE0A0", "#FFB0C0", "#A0D8FF"],
+            // Poster inks: charcoal, steel blue, rust, sage, sun, violet; highlighters in the same family.
+            CanvasTool.pen.rawValue: ["#1E2530", "#3D6FA3", "#C2452A", "#4E8A5E", "#E8742F", "#7E5AA6"],
+            CanvasTool.highlighter.rawValue: ["#FBDA7E", "#B9DDB0", "#F7B8A6", "#B5CCE3"],
         ]
     }
     @Published var fingerDrawing: Bool = true

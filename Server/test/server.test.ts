@@ -6,6 +6,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createInkLabRequestListener } from '../src/server.ts'
 import type { AnthropicClient, CompleteOpts } from '../src/types.ts'
 
+// The default widget model depends on these; keep tests offline and deterministic whatever the shell has set.
+delete process.env.OPENAI_API_KEY
+delete process.env.MAKE_REAL_MODEL
+
+
 const eligibleSession = {
   isOnline: true,
   userKind: 'adult' as const,

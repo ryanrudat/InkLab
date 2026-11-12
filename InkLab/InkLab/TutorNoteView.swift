@@ -1,34 +1,35 @@
 import UIKit
 
 /// Everything the tutor's margin note looks like — colours, fonts, shapes, spacing — in one place, so the
-/// app theme can restyle it without touching layout code. Neutral system styling until the shared theme
-/// (`Theme.swift`) exists; switch `current` (or these defaults) over to it then.
+/// app theme can restyle it without touching layout code. Styled from `Theme`: the tutor wears the sun
+/// (a warm sand card, a Futura header in sun orange, sun-orange controls and connector); engine results
+/// elsewhere wear steel, so the two never read as the same voice.
 struct TutorNoteStyle {
     var width: CGFloat = 280
     var padding: CGFloat = 12
     var spacing: CGFloat = 6
-    var cornerRadius: CGFloat = 10
+    var cornerRadius: CGFloat = 14
     var borderWidth: CGFloat = 1
-    var background: UIColor = .systemBackground
-    var border: UIColor = .separator
-    var shadowOpacity: Float = 0.12
-    var shadowRadius: CGFloat = 4
+    var background: UIColor = Theme.sandTint
+    var border: UIColor = Theme.sun.withAlphaComponent(0.35)
+    var shadowOpacity: Float = 0.10
+    var shadowRadius: CGFloat = 6
 
-    var headerFont: UIFont = .systemFont(ofSize: 12, weight: .semibold)
-    var headerColor: UIColor = .secondaryLabel
-    var bodyFont: UIFont = .systemFont(ofSize: 15)
-    var bodyColor: UIColor = .label
-    var threadFont: UIFont = .systemFont(ofSize: 13)
-    var threadColor: UIColor = .secondaryLabel
-    var studentColor: UIColor = .label
-    var checkFollows: UIColor = .systemGreen
-    var checkDoesNotFollow: UIColor = .systemRed
-    var checkUnknown: UIColor = .secondaryLabel
+    var headerFont: UIFont = Theme.title(13)
+    var headerColor: UIColor = Theme.sun
+    var bodyFont: UIFont = Theme.ui(15)
+    var bodyColor: UIColor = Theme.ink
+    var threadFont: UIFont = Theme.ui(13)
+    var threadColor: UIColor = Theme.inkSecondary
+    var studentColor: UIColor = Theme.ink
+    var checkFollows: UIColor = Theme.sage
+    var checkDoesNotFollow: UIColor = Theme.rust
+    var checkUnknown: UIColor = Theme.inkSecondary
 
-    var controlFont: UIFont = .systemFont(ofSize: 13, weight: .medium)
-    var controlTint: UIColor = .systemBlue
+    var controlFont: UIFont = Theme.ui(13, .semibold)
+    var controlTint: UIColor = Theme.sun
 
-    var connectorColor: UIColor = .tertiaryLabel
+    var connectorColor: UIColor = Theme.sun.withAlphaComponent(0.6)
     var connectorWidth: CGFloat = 1
     var anchorDotRadius: CGFloat = 2.5
     /// Room at the header's right for the note's ✕ (the host's close button, one per session).

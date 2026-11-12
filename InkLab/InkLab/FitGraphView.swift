@@ -12,7 +12,7 @@ final class FitGraphView: UIView, NativeWidgetView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .systemBackground
+        backgroundColor = Theme.card
         isOpaque = true
         contentMode = .redraw
     }
@@ -39,11 +39,11 @@ final class FitGraphView: UIView, NativeWidgetView {
         }
 
         // Plot frame.
-        UIColor.separator.setStroke()
+        Theme.chrome.setStroke()
         let border = UIBezierPath(rect: plot); border.lineWidth = 0.5; border.stroke()
 
         // The user's sampled points.
-        UIColor.systemGray2.setFill()
+        Theme.slate.withAlphaComponent(0.55).setFill()
         for p in s.points { let c = map(p); UIBezierPath(ovalIn: CGRect(x: c.x - 1.8, y: c.y - 1.8, width: 3.6, height: 3.6)).fill() }
 
         // The fitted curve.
@@ -51,15 +51,15 @@ final class FitGraphView: UIView, NativeWidgetView {
             let path = UIBezierPath(); path.lineWidth = 2; path.lineJoinStyle = .round
             path.move(to: map(s.curve[0]))
             for p in s.curve.dropFirst() { path.addLine(to: map(p)) }
-            UIColor.systemBlue.setStroke(); path.stroke()
+            Theme.sun.setStroke(); path.stroke()
         }
 
         // Header: model · R², then the equation.
         text("\(s.model)  ·  R² = \(String(format: "%.3f", s.rSquared))",
              in: CGRect(x: margin, y: 3, width: plot.width, height: 14),
-             font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabel)
+             font: Theme.ui(11, .semibold), color: Theme.inkSecondary)
         text(s.equation, in: CGRect(x: margin, y: 16, width: plot.width, height: 17),
-             font: .systemFont(ofSize: 13, weight: .medium), color: .label)
+             font: Theme.ui(13, .medium), color: Theme.ink)
     }
 
     private func text(_ s: String, in rect: CGRect, font: UIFont, color: UIColor) {

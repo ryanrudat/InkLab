@@ -146,7 +146,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = Theme.paper
 
         for v in [paperView, canvasView, overlay] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -570,7 +570,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private func notifyPageChanged() { onPageChanged?(store.currentPageIndex + 1, store.pageCount) }
 
     func addSticky() {
-        insertObject(kind: .sticky, payload: .sticky(text: "Sticky", colorHex: "#FFE680"), size: CGSize(width: 160, height: 120))
+        insertObject(kind: .sticky, payload: .sticky(text: "Sticky", colorHex: "#F9DC8C"), size: CGSize(width: 160, height: 120))
     }
 
     /// Insert a deterministic-engine result as a callout object on the page (`onPage`: the page the
@@ -1216,7 +1216,22 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             guard let self else { return }
             defer { self.isGenerating = false; self.drainMakeRealQueue() }
             do {
-                let widget = try await MakeReal.provider.generate(prompt: prompt, session: session)
+                var widget = try await MakeReal.provider.generate(prompt: prompt, session: session)
+                guard !Task.isCancelled, !self.isDismissing else { return }
+                // Render check: run it hidden first. A widget that crashes or shows nothing is regenerated once,
+                // with the error, while the "Designing…" card stays up, so students never see a blank card.
+                var health = await WidgetRenderCheck.run(html: widget.html, size: widget.layout.contentSize)
+                var warning: String?
+                if !health.ok {
+                    guard !Task.isCancelled, !self.isDismissing else { return }
+                    placeholder.setStatus("Fixing a problem")
+                    self.onStatus?("That design didn't work, fixing it…")
+                    widget = try await MakeReal.provider.generate(prompt: makeRealRetryPrompt(prompt, after: health), session: session)
+                    guard !Task.isCancelled, !self.isDismissing else { return }
+                    health = await WidgetRenderCheck.run(html: widget.html, size: widget.layout.contentSize)
+                    // Still broken: place it anyway (it may partly work) and say so; the student can delete or retry.
+                    if !health.ok { warning = "“\(prompt)” may not work fully. Try describing it differently." }
+                }
                 guard !Task.isCancelled, !self.isDismissing else { return }
                 placeholder.stop(); placeholder.removeFromSuperview()
                 let provenance = (try? String(data: JSONSerialization.data(withJSONObject: ["prompt": prompt]), encoding: .utf8)) ?? "{}"
@@ -1227,7 +1242,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                                   aiProvenance: provenance,
                                   at: center,        // drop it exactly where the placeholder was
                                   onPage: targetPage)   // …on the page the request was started on
-                self.onStatus?("Created “\(prompt)”")
+                self.onStatus?(warning ?? "Created “\(prompt)”")
             } catch {
                 placeholder.stop(); placeholder.removeFromSuperview()
                 guard !Task.isCancelled, !self.isDismissing else { return }

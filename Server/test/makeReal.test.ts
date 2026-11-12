@@ -5,6 +5,11 @@ import { assembleGeneration, DONE_MARKER } from '../src/assembler.ts'
 import { extractWidgetHtml, widgetLayout } from '../src/validate.ts'
 import type { AnthropicClient, AnthropicResponse, CompleteOpts, Session } from '../src/types.ts'
 
+// The default widget model depends on these; keep tests offline and deterministic whatever the shell has set.
+delete process.env.OPENAI_API_KEY
+delete process.env.MAKE_REAL_MODEL
+
+
 const adult: Session = { isOnline: true, userKind: 'adult', aiConsentGranted: true, ageVerified: true }
 const doc = '<!DOCTYPE html>\n<html><head><meta name="inklab-layout" content="landscape"><title>Clock</title></head><body><div>tick</div></body></html>'
 

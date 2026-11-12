@@ -9,10 +9,10 @@ final class PaperView: UIView {
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        UIColor.systemBackground.setFill()
+        Theme.paper.setFill()
         ctx.fill(rect)
 
-        let line = UIColor.separator.withAlphaComponent(0.6)
+        let line = Theme.rule
         ctx.setLineWidth(0.5)
         line.setStroke()
 
