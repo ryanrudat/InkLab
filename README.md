@@ -19,9 +19,9 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 (least squares + R² + error bars), **linked multi-representation** (equation↔table↔best-fit), the
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
-all have working, tested cores. **145 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **47 app unit tests + UI tests** (the iPad target), plus a **TypeScript
-backend proxy** (`Server/`, **85 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
+all have working, tested cores. **149 package tests across 12 pure-Swift library packages** (plus the
+`InkLabKit` umbrella), plus **54 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+backend proxy** (`Server/`, **95 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
 (hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
 
@@ -69,14 +69,17 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   the words; ink is never erased. Settings toggle (default on).
 - **Deterministic engines (COMPUTE)** via the `@`-command bar: `@balance`, `@molar`, `@units`,
   `@transcribe`, `@punnett`, `@check` (red-pen tutor), `@differentiate` — on the real engines.
-- **Socratic tutor** — lasso a problem + your working → **Tutor** (lasso menu or `＋`). The red pen
+- **Socratic tutor** — lasso a problem + your working → **Tutor** (lasso menu, or its own
+  graduation-cap button in the dock). The red pen
   (`checkChain`) decides what's wrong; the proxy's `POST /tutor` (Claude Opus 5.5, low effort) only talks,
   one rung of a hint ladder at a time (nudge → question about the line → concept → worked example of a
   *different* problem), climbing only when the student asks. Every reply passes an **answer-leak guard**
   twice — numerically on the proxy, exactly with the engine on the device — and falls back to a math-free
-  hint rather than ever showing the answer or the corrected step. Reply by writing next to the problem
-  (read after a pause; any step you write is checked by the red pen, and a verified fix is passed to the
-  tutor as a correction) or with the note's **Reply** button. The tutor lives in one **margin note** beside
+  hint rather than ever showing the answer or the corrected step. Reply from the note: **Write on the
+  page** highlights a space under the problem and reads what you write there after a pause (any step you
+  write is checked by the red pen, and a verified fix is passed to the tutor as a correction), and
+  **Type** opens a text field. An unfinished line ("1+3=") gets a nudge to finish it, never "can't
+  read". The tutor lives in one **margin note** beside
   the line it's about, with earlier messages folded away; undo rewinds the conversation a message at a
   time. ⚠️ Needs the moderation safeguard before minors use it.
 - **Generative make-real** — `@<anything>` generates a live widget via Claude (`claude-opus-4-8`,
@@ -220,11 +223,11 @@ packages also wired in as direct, browsable local references. See **[How to run]
 
 ## Build & test
 
-The 12 pure-Swift library packages (145 tests total) run on the CLI without an iPad:
+The 12 pure-Swift library packages (149 tests total) run on the CLI without an iPad:
 ```sh
 ( cd Packages/InkLabRecognition && swift test )    # 9 tests — recognition routing/consent
 ( cd Packages/InkLabDoc         && swift test )    # 10 tests — the journal (incl. setObjectState/promote undo)
-( cd Packages/InkLabMath        && swift test )    # 32 tests — the red pen (algebra + calculus) + the tutor's leak guard
+( cd Packages/InkLabMath        && swift test )    # 36 tests — the red pen (algebra + calculus) + the tutor's leak guard
 ( cd Packages/InkLabUnits       && swift test )    # the dimensional conscience
 ( cd Packages/InkLabChem        && swift test )    # chemistry (balancing + molar mass)
 ( cd Packages/InkLabBio         && swift test )    # biology (genetics + sequences)

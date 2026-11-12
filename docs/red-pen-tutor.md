@@ -102,11 +102,11 @@ vertical snapping — in `CanvasScreen.swift`. It touches none of the red-pen pa
 at <https://github.com/ryanrudat/InkLab>.
 
 ## Status (2026-11-12) — the Socratic tutor builds on the red pen
-The new **Tutor** action (lasso menu / `＋`) talks with the student about their working through hints and
+The new **Tutor** action (lasso menu / its own dock button) talks with the student about their working through hints and
 questions, and is built on this engine rather than beside it: `checkChain` is still the only judge of
 correctness, for the selected working **and for every step the student writes back** during the
 conversation (a verified step replaces the wrong line). New in this package (`TutorGuard.swift`, 8 tests,
-now **32** in total): `problemFacts` derives what the tutor must never hand over (the problem's value,
+now **36** in total, with the unfinished-line and arithmetic checks): `problemFacts` derives what the tutor must never hand over (the problem's value,
 its solution set, the exact derivative, or the integrand), and `tutorReplyLeak` checks a tutor reply
 against it by exact equivalence — equal canonical forms, proportional `L − R` numerators (the same rule as
 an equation step), a stated solution, or an antiderivative — before it reaches the page. The proxy runs a

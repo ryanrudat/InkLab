@@ -76,6 +76,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// student replies waiting behind it (ink written while the tutor was still answering).
     private var tutorBusy: Set<UUID> = []
     private var pendingTutorReplies: [UUID: [(text: String, wantsHint: Bool, page: UUID)]] = [:]
+    /// "Write on the page": the highlighted space where the student's next ink is read as their reply
+    /// (one at a time, on the page it was opened on).
+    private var tutorWriteZone: (session: UUID, page: UUID, rect: CGRect, view: TutorWriteZoneView)?
 
     // Automatic in-canvas "@" detection: after a writing pause, OCR the NEW strokes; if they read as
     // an "@" command, run it and erase that ink. `consumedStrokeCount` marks how many strokes (from
@@ -143,6 +146,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     var onPageChanged: ((Int, Int) -> Void)?
     /// Called on the main actor when Vision produces a transcription to review.
     var onRecognized: ((RecognitionDraft) -> Void)?
+    /// Switch the chrome's tool (the tutor's "Write on the page" needs a drawing tool).
+    var onSelectTool: ((CanvasTool) -> Void)?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -170,7 +175,12 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         overlay.onRecognizeAnnotation = { [weak self] id, image in self?.recognizeAnnotationAndDrive(id, image) }
         overlay.onAnnotationChanged = { [weak self] id, data in self?.enqueueInkData(data ?? Data(), page: id) }
         overlay.annotationProvider = { [weak self] id in self?.loadInkData(page: id) }
-        overlay.onTutorReply = { [weak self] id in self?.promptTutorReply(calloutID: id) }
+        overlay.onTutorReply = { [weak self] id, mode in
+            switch mode {
+            case .write: self?.openTutorWriteZone(calloutID: id)
+            case .type: self?.promptTutorReply(calloutID: id)
+            }
+        }
         store.onPersistenceError = { [weak self] error in self?.reportPersistenceFailure(error) }
 
         lassoLayer.strokeColor = UIColor.systemBlue.cgColor
@@ -242,6 +252,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         activeAsyncTasks.removeAll()
         makeRealQueue.removeAll()
         pendingTutorReplies.removeAll()
+        closeTutorWriteZone()
         for case let placeholder as DesigningPlaceholderView in overlay.subviews {
             placeholder.stop()
             placeholder.removeFromSuperview()
@@ -562,6 +573,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         setCanvasDrawing(s.ink)
         undoSteps = s.undo; redoSteps = s.redo; lastDrawing = s.last; consumedStrokeCount = s.consumed
         overlay.apply(projectionDiff(old: oldPage, new: store.page), page: store.page)   // remove old objs, add new
+        closeTutorWriteZone()
         canvasView.setContentOffset(.zero, animated: false)
         clearLassoSelection()
         notifyPageChanged()
@@ -748,6 +760,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             self.consumedStrokeCount = firedCount   // examined — never re-read (the ink stays on the page)
             guard !read.isEmpty else { self.onStatus?("Couldn't read your reply — try writing a little larger."); return }
             if read.hasPrefix("@") { self.runInkCommand(read, onPage: page); return }
+            if self.tutorWriteZone?.session == sessionID { self.closeTutorWriteZone() }
             self.sendTutorReply(sessionID: sessionID, text: read, wantsHint: false, page: page)
         }
     }
@@ -757,8 +770,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         guard let obj = store.page.objects[calloutID], case .callout(_, _, let json) = obj.payload,
               let provenance = TutorCalloutProvenance.decode(json) else { return }
         let sessionID = provenance.tutor.id, page = store.pageID
+        closeTutorWriteZone()
         let alert = UIAlertController(title: "Reply to the tutor",
-                                      message: "You can also write your answer on the page, next to the problem.",
+                                      message: "Or tap Write on the page to answer in your own handwriting.",
                                       preferredStyle: .alert)
         alert.addTextField { field in
             field.placeholder = "Your answer or a question"
@@ -778,6 +792,32 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         alert.addAction(send)
         alert.preferredAction = send
         present(alert, animated: true)
+    }
+
+    /// "Write on the page": highlight a free space under the problem and read the next ink written there
+    /// as the student's reply (ink elsewhere near the problem still counts, as before).
+    private func openTutorWriteZone(calloutID: UUID) {
+        guard let obj = store.page.objects[calloutID], case .callout(_, _, let json) = obj.payload,
+              let provenance = TutorCalloutProvenance.decode(json) else { return }
+        closeTutorWriteZone()
+        let session = provenance.tutor
+        let avoid = TutorLayout.obstacles(ink: canvasView.drawing.strokes.map(\.renderBounds), page: store.page, except: nil)
+        let rect = TutorLayout.writeZone(problem: session.problem, avoiding: avoid, canvasWidth: view.bounds.width)
+        let zoneView = TutorWriteZoneView(frame: rect)
+        zoneView.onCancel = { [weak self] in self?.closeTutorWriteZone() }
+        overlay.addSubview(zoneView)
+        tutorWriteZone = (session: session.id, page: store.pageID, rect: rect, view: zoneView)
+        // Writing needs a drawing tool, and ink already on the page is not the reply.
+        if currentTool != .pen && currentTool != .highlighter { onSelectTool?(.pen) }
+        pendingAutoScan?.cancel(); pendingAutoScan = nil
+        consumedStrokeCount = canvasView.drawing.strokes.count
+        canvasView.scrollRectToVisible(rect.insetBy(dx: -24, dy: -24), animated: true)
+        onStatus?("Write your reply in the highlighted space — the tutor reads it when you pause.")
+    }
+
+    private func closeTutorWriteZone() {
+        tutorWriteZone?.view.removeFromSuperview()
+        tutorWriteZone = nil
     }
 
     /// Add the student's reply (the engine checks any math in it) and ask for the next tutor message.
@@ -1076,6 +1116,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         )
         let firedCount = strokes.count
         let scanPage = store.pageID            // the page these strokes belong to
+        // Ink in the highlighted write-here space is that session's reply.
+        if let zone = tutorWriteZone, zone.page == scanPage, zone.rect.intersects(batch.bounds) {
+            readTutorReply(input, sessionID: zone.session, firedCount: firedCount, page: scanPage)
+            return
+        }
         // New ink next to a tutor session's problem (or its messages) is the student's reply.
         if let session = tutorSessions.first(where: {
             TutorLayout.replyZone(problem: $0.latest.provenance.tutor.problem, callouts: $0.all.map(\.frame)).intersects(batch.bounds)
@@ -1304,6 +1349,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     private func refresh(_ before: PageProjection) {
         overlay.apply(projectionDiff(old: before, new: store.page), page: store.page)
+        // The write-here space belongs to a session: closing (or undoing) the session removes it.
+        if let zone = tutorWriteZone, zone.page == store.pageID,
+           !TutorLayout.sessions(on: store.page).contains(where: { $0.latest.provenance.tutor.id == zone.session }) {
+            closeTutorWriteZone()
+        }
     }
 
     // MARK: - Lasso

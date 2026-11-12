@@ -37,8 +37,11 @@ const client: AnthropicClient = {
       const level = Number(/Current level: (\d)/.exec(system)?.[1] ?? 1)
       const last = opts.messages[opts.messages.length - 1]
       const lastText = typeof last.content === 'string' ? last.content : ''
+      const unfinished = typeof opts.messages[0].content === 'string' && opts.messages[0].content.includes('is not finished')
       let draft: string
       if (lastText.includes('checker verified the math')) draft = 'Nice fix to line 2. What could you do to both sides next to get x on its own?'
+      // "1+3=" (MOCK_PROBLEM='1+3='): the first draft gives the value away; the regeneration nudges.
+      else if (unfinished && opts.messages.length === 1) draft = strict ? 'What do you get when you put those two numbers together?' : 'You get 4, so what will you write after the equals sign?'
       else if (!strict && opts.messages.length === 1) draft = 'Subtract 3 from both sides and you get x = 2, see?'   // leaks: the guard must reject it
       else draft = LADDER[Math.min(LADDER.length, Math.max(1, level)) - 1]
       console.log(`[tutor] model=${opts.model} effort=${opts.effort} level=${level} strict=${strict} → ${JSON.stringify(draft)}`)

@@ -358,6 +358,10 @@ private struct DockBar: View {
             divider
             Button { model.onAddSticky?() } label: { Image(systemName: "note.text.badge.plus") }
                 .accessibilityIdentifier("addSticky")
+            // The Socratic tutor gets its own button: lasso a problem (or not, for the whole page) and tap.
+            Button { model.onTutor?() } label: { Image(systemName: "graduationcap") }
+                .accessibilityIdentifier("tutor")
+                .accessibilityLabel("Tutor")
             insertMenu
             divider
             Button { model.onUndo?() } label: { Image(systemName: "arrow.uturn.backward") }
@@ -387,7 +391,9 @@ private struct DockBar: View {
         // The strip scrolls along the dock's axis: a horizontal window when floating, a vertical one when
         // wall-docked — so the dock never grows past a fixed extent in either orientation.
         let vertical = axis == .vertical
-        let window = min(CGFloat(max(model.currentColors.count, 1)) * 32, 124)
+        // Three swatches at a time (the rest scroll): with the Tutor button the dock must still fit a
+        // portrait iPad (820 pt) while the pen's colors and sizes are showing.
+        let window = min(CGFloat(max(model.currentColors.count, 1)) * 32, 92)
         let outer = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
         let inner = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
         return outer {
@@ -482,8 +488,6 @@ private struct DockBar: View {
             Button { model.onRecognize?() } label: { Label("Recognize", systemImage: "text.viewfinder") }
             Button { model.onCheckWork?() } label: { Label("Check work", systemImage: "checkmark.seal") }
                 .accessibilityIdentifier("checkWork")
-            Button { model.onTutor?() } label: { Label("Tutor", systemImage: "graduationcap") }
-                .accessibilityIdentifier("tutor")
             Button { model.onFitCurve?() } label: { Label("Fit graph", systemImage: "chart.xyaxis.line") }
                 .accessibilityIdentifier("fitCurve")
             // The native, engine-backed calculator (correct by construction, on-device, no cloud).
@@ -542,6 +546,7 @@ private struct CanvasRepresentable: UIViewControllerRepresentable {
         vc.onStatus = onStatus
         vc.onPersistenceWarning = onPersistenceWarning
         vc.onRecognized = { [weak model] draft in model?.pendingRecognition = draft }
+        vc.onSelectTool = { [weak model] tool in model?.tool = tool }
         model.onUndo = { [weak vc] in vc?.performUndo() }
         model.onRedo = { [weak vc] in vc?.performRedo() }
         model.onAddSticky = { [weak vc] in vc?.addSticky() }

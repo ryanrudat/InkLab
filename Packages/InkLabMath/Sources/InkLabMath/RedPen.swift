@@ -15,6 +15,40 @@ public enum TutorVerdict: Equatable, Sendable {
     /// `line` is the 1-based number of the first line that doesn't follow from the one above it.
     case firstError(line: Int, kind: TutorErrorKind, explanation: String, counterexample: String?)
     case unsupported(line: Int, reason: String)
+    /// Line `line` isn't finished: nothing after its "=" ("1 + 3 =", "2x ="), or on line 1 nothing before
+    /// it. Not a mistake and not unreadable; the lines above it were checked and follow.
+    case unfinished(line: Int)
+}
+
+/// The first line the student hasn't finished, 1-based: one that ends with "=" (nothing on its right),
+/// or line 1 starting with "=" (nothing on its left; later lines may start with "=" to continue the line
+/// above). Blank lines are skipped, as `checkChain` does.
+public func unfinishedLine(_ rawLines: [String]) -> Int? {
+    let lines = rawLines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    for (i, l) in lines.enumerated() where l.hasSuffix("=") || (i == 0 && l.hasPrefix("=")) {
+        return i + 1
+    }
+    return nil
+}
+
+/// An unfinished line without its dangling "=" ("1 + 3 =" → "1 + 3"): the part the student did write.
+public func withoutDanglingEquals(_ line: String) -> String {
+    var s = line.trimmingCharacters(in: .whitespaces)
+    if s.hasSuffix("=") { s = String(s.dropLast()).trimmingCharacters(in: .whitespaces) }
+    else if s.hasPrefix("=") { s = String(s.dropFirst()).trimmingCharacters(in: .whitespaces) }
+    return s
+}
+
+/// The student's answer to an unfinished line as the finished line: "1 + 3 =" answered with "4" (or
+/// "= 4") is "1 + 3 = 4"; "= 7" answered with "2x + 3" is "2x + 3 = 7". A whole line ("1 + 3 = 4") is
+/// taken as written.
+public func completingUnfinished(_ unfinished: String, with step: String) -> String {
+    let u = unfinished.trimmingCharacters(in: .whitespaces), s = step.trimmingCharacters(in: .whitespaces)
+    let body = s.hasPrefix("=") ? String(s.dropFirst()).trimmingCharacters(in: .whitespaces) : s
+    guard !body.isEmpty, !body.contains("=") else { return s }
+    let written = withoutDanglingEquals(u)
+    if written.isEmpty { return body }
+    return u.hasSuffix("=") ? "\(written) = \(body)" : "\(body) = \(written)"
 }
 
 enum LineForm: Equatable {
@@ -64,6 +98,15 @@ func stripDifferential(_ s: String) -> (String, String) {
 public func checkChain(_ rawLines: [String]) -> TutorVerdict {
     let lines = rawLines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     guard !lines.isEmpty else { return .unsupported(line: 0, reason: "no input") }
+    // A line ending in "=" is a step the student hasn't finished, not one the parser can't read. The
+    // lines above it are checked as usual, and a mistake there comes first.
+    if let u = unfinishedLine(lines) {
+        if u > 1 {
+            let above = checkChain(Array(lines[..<(u - 1)]))
+            if case .allValid = above {} else { return above }
+        }
+        return .unfinished(line: u)
+    }
 
     var forms: [LineForm] = []
     for (i, l) in lines.enumerated() {
@@ -78,10 +121,23 @@ public func checkChain(_ rawLines: [String]) -> TutorVerdict {
     case .integralClaim(let f, let v, let ans): return checkIntegral(f, v, ans, forms)
     case .equation(.deriv(let inner, let v), let rhs): return checkDerivative(inner, v, rhs, forms)
     case .expression(.deriv(let inner, let v)): return checkDerivative(inner, v, nil, forms)
-    case .equation: return checkEquationChain(forms)
+    case .equation(let l, let r):
+        if let wrong = falseArithmetic(l, r) { return wrong }
+        return checkEquationChain(forms)
     case .expression: return checkExpressionChain(forms)
     case .continuation: return .unsupported(line: 1, reason: "a chain can't begin with '='")
     }
+}
+
+/// "1 + 3 = 5" has no unknowns, so it is simply false. An equation chain compares each line's solutions
+/// with the line above, which can't see that on line 1 (there is nothing above it); later lines are
+/// compared as usual ("x + 5 = x" → "5 = 0" is a fine step).
+private func falseArithmetic(_ l: Expr, _ r: Expr) -> TutorVerdict? {
+    let a = canonicalize(l), b = canonicalize(r)
+    let sides = [a, b]
+    guard sides.allSatisfy({ $0.num.atoms.isEmpty && $0.den.atoms.isEmpty && $0.isWellDefined && !$0.isOverflow }),
+          !a.equals(b) else { return nil }
+    return .firstError(line: 1, kind: .notEqual, explanation: "The two sides of line 1 aren't equal.", counterexample: nil)
 }
 
 // MARK: - Expression-simplification chain (consecutive values must be exactly equal)

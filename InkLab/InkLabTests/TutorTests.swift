@@ -107,6 +107,31 @@ struct TutorTests {
         #expect(fixed.corrections == [TutorCorrection(line: 1, from: ["d/dx(x^2) = x"], to: ["d/dx(x^2) = 2x"])])
     }
 
+    @Test func anUnfinishedLineIsAStepToFinishNotUnreadable() {
+        // The live case: "1+3=" with nothing after the "=". The engine reads it fine; it isn't finished.
+        let s = session("1+3=")
+        #expect(s.verdict == .unfinished(line: 1))
+        #expect(s.anchorLine == 1)
+        let req = s.request(session: .init(isOnline: true, userKind: "adult", aiConsentGranted: true, ageVerified: true))
+        #expect(req.verdict.kind == "unfinished" && req.verdict.line == 1 && req.verdict.reason == nil)
+        #expect(req.chain == "expression" && req.protected.map(\.kind) == ["expression"])
+        // Its value is the answer: the app's own guard won't let it through either.
+        #expect(TutorGuard.leak(in: "You get 4.", session: s) != nil)
+        #expect(TutorGuard.leak(in: "What do you get when you put 1 and 3 together?", session: s) == nil)
+        let fallback = TutorGuard.genericHint(for: s)
+        #expect(!fallback.localizedCaseInsensitiveContains("read") && !fallback.localizedCaseInsensitiveContains("check"))
+        #expect(fallback.filter { $0 == "?" }.count == 1)
+
+        // The student's answer finishes the line and is checked by the engine: right, wrong, or asked.
+        let right = s.addingStudentReply("4", wantsHint: false)
+        #expect(right.thread.last?.check == .follows)
+        #expect(right.lines == ["1+3 = 4"] && right.corrections == [TutorCorrection(line: 1, from: ["1+3="], to: ["1+3 = 4"])])
+        #expect(s.addingStudentReply("5", wantsHint: false).thread.last?.check == .doesNotFollow)
+        #expect(s.addingStudentReply("1 + 3 = 5", wantsHint: false).thread.last?.check == .doesNotFollow)
+        let asked = s.addingStudentReply("is it 4?", wantsHint: false)
+        #expect(asked.thread.last?.check == .follows && asked.thread.last?.question == true && asked.lines == s.lines)
+    }
+
     @Test func theStudentsOwnStepsMayBeQuotedBack() {
         let s = session("2x + 3 = 7\n2x = 10").addingStudentReply("2x = 4", wantsHint: false)
         #expect(TutorGuard.leak(in: "Yes! 2x = 4 checks out. What's next?", session: s) == nil)

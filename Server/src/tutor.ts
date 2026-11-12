@@ -26,6 +26,8 @@ export type TutorVerdict =
   | { kind: 'allValid'; steps: number }
   | { kind: 'firstError'; line: number; explanation: string; counterexample?: string }
   | { kind: 'unsupported'; line: number; reason: string }
+  /// Line `line` isn't finished ("1 + 3 =": nothing after its "="). Not a mistake, and not unreadable.
+  | { kind: 'unfinished'; line: number }
 /// The engine's check of math the student wrote in a reply (the app re-runs `checkChain` on it).
 export type StepCheck = 'follows' | 'doesNotFollow' | 'cannotCheck'
 /// `question`: the student ASKED about the math ("so is x = 2?") rather than writing it as a step, so the
@@ -86,6 +88,8 @@ export function parseTutorRequest(body: any): { ok: true; req: TutorRequest } | 
     verdict = { kind: 'firstError', line: v.line, explanation: v.explanation, ...(v.counterexample ? { counterexample: v.counterexample } : {}) }
   } else if (v?.kind === 'unsupported' && isLine(v.line, working.length) && isStr(v.reason, LIMITS.verdictChars)) {
     verdict = { kind: 'unsupported', line: v.line, reason: v.reason }
+  } else if (v?.kind === 'unfinished' && isLine(v.line, working.length)) {
+    verdict = { kind: 'unfinished', line: v.line }
   } else return bad('invalid verdict')
 
   const targets = body?.protected
@@ -144,7 +148,7 @@ export function currentRung(thread: TutorTurn[]): number {
 }
 
 /// What the engine currently says about the student's work: the latest checked step wins.
-export type CheckerState = 'valid' | 'error' | 'unknown'
+export type CheckerState = 'valid' | 'error' | 'unknown' | 'unfinished'
 export function checkerState(req: TutorRequest): CheckerState {
   for (let i = req.thread.length - 1; i >= 0; i--) {
     const check = req.thread[i].check
@@ -152,7 +156,18 @@ export function checkerState(req: TutorRequest): CheckerState {
     if (check === 'doesNotFollow') return 'error'
     if (check === 'cannotCheck') return 'unknown'
   }
-  return req.verdict.kind === 'allValid' ? 'valid' : req.verdict.kind === 'firstError' ? 'error' : 'unknown'
+  switch (req.verdict.kind) {
+    case 'allValid': return 'valid'
+    case 'firstError': return 'error'
+    case 'unsupported': return 'unknown'
+    case 'unfinished': return 'unfinished'
+  }
+}
+
+/// The opening reply about a line the checker couldn't check starts by saying so (`cantCheckSentence`),
+/// once: nothing after it may say it again.
+export function opensWithCantCheck(req: TutorRequest): boolean {
+  return req.thread.length === 0 && req.verdict.kind === 'unsupported'
 }
 
 const RUNG_GUIDE = [
@@ -162,8 +177,17 @@ const RUNG_GUIDE = [
   '4. Worked example: show a short worked example of a DIFFERENT problem that uses the same idea, with different numbers, a different variable if you can, and a different answer. Then ask them to try the same move on their own line.',
 ]
 
+/// The engine's reason is for developers: "couldn't read …" is its parser, not the handwriting, so a
+/// student is never told their writing couldn't be read.
 export function cantCheckSentence(v: Extract<TutorVerdict, { kind: 'unsupported' }>): string {
+  if (/^couldn'?t read\b/i.test(v.reason)) return `My checker can't work with line ${v.line} as it's written, so I won't guess whether it's right.`
   return `I can't check line ${v.line} with my checker (${v.reason.replace(/[.\s]+$/, '')}), so I won't guess whether it's right.`
+}
+
+/// Which side of an unfinished page line is empty: "1 + 3 =" has nothing after its "=".
+function emptySide(req: TutorRequest, line: number): 'after' | 'before' {
+  const text = (req.working[line - 1] ?? req.lines[line - 1] ?? '').trim()
+  return text.endsWith('=') ? 'after' : 'before'
 }
 
 const show = (steps: string[]) => steps.map((l) => neutralize(l)).join(', ')
@@ -189,11 +213,16 @@ function checkerSummary(req: TutorRequest, targets: CompiledTarget[], studentWro
       return corrected
         ? `After the corrections above, the checker verified the student's working step by step: every step now follows from the one before. Their ORIGINAL working on the page was not all correct, so never say it was. If the work is not finished, the next step is theirs to find.`
         : `The checker verified all ${req.lines.length} line(s): each one follows from the line above. There is no mistake in what the student has written so far. If the work is not finished, the next step is theirs to find.`
+    case 'unfinished': {
+      const before = v.line > 1 ? ` Lines 1 to ${v.line - 1} were checked and follow correctly.` : ''
+      return `Line ${v.line} is not finished: it has nothing ${emptySide(req, v.line)} its equals sign yet.${before} That is not a mistake, and the line was read fine, so never say you can't read it or can't check it. Help the student work out themselves what goes ${emptySide(req, v.line)} the equals sign, and never say what it is.`
+    }
     case 'firstError': {
       // The counterexample is engine output, but a "lost solution" counterexample names a solution
       // ("x = -2 is a solution of the line above…"). Never put anything the guard would flag in the prompt.
       const evidence = v.counterexample && !findLeak(v.counterexample, targets, studentWrote) ? ` Checker's evidence: ${v.counterexample}` : ''
       const before = v.line > 1 ? ` Lines 1 to ${v.line - 1} are correct.` : ''
+      if (v.line === 1) return `The checker found that line 1 is not true as written. ${v.explanation}${evidence}`
       return `The checker found that line ${v.line} is the first line that does not follow from the line above it. ${v.explanation}${evidence}${before}`
     }
     case 'unsupported': {
@@ -315,6 +344,14 @@ const ORIGINAL_WAS_RIGHT = [
   /\balready\s+(?:on|in|there)\b/,
 ]
 
+/// "I can't read / check that": wrong about an unfinished line (it was read, and there's nothing to check
+/// yet), and a repeat after the opening can't-check sentence.
+const CANT_READ_OR_CHECK = [
+  /\b(?:can'?t|cannot|can not|couldn'?t|could not|unable to|not able to)\s+(?:quite\s+)?(?:read|make out|understand|check|tell|verify|confirm)\b/,
+  /\b(?:unreadable|illegible|won'?t guess)\b/,
+]
+const says = (reply: string, patterns: RegExp[]) => patterns.some((p) => new RegExp(p.source, 'i').test(reply))
+
 function lineJudgement(line: number): RegExp[] {
   return [new RegExp(`\\bline\\s+${line}\\s+(?:is|looks)\\s+(?:correct|right|wrong|incorrect|fine)\\b`)]
 }
@@ -327,6 +364,7 @@ export function contradictsChecker(reply: string, req: TutorRequest): boolean {
   for (const m of reply.matchAll(/\blines?\s+(\d+)\b/gi)) if (Number(m[1]) > req.lines.length) return true
   if (req.corrections.length > 0 && claimsAny(reply, ORIGINAL_WAS_RIGHT)) return true
   const state = checkerState(req)
+  if (state === 'unfinished') return claimsAny(reply, CLAIMS_MISTAKE) || says(reply, CANT_READ_OR_CHECK)
   if (state === 'valid') return claimsAny(reply, CLAIMS_MISTAKE)
   if (state === 'error') {
     const flagged = req.verdict.kind === 'firstError' ? [new RegExp(`\\bline\\s+${req.verdict.line}\\s+(?:is|looks)\\s+(?:correct|right|fine)\\b`)] : []
@@ -336,7 +374,7 @@ export function contradictsChecker(reply: string, req: TutorRequest): boolean {
   return claimsAny(reply, [...WHOLE_WORK_CORRECT, ...CLAIMS_MISTAKE, ...unchecked])
 }
 
-export type ReviewProblem = { kind: 'leak'; candidate: string } | { kind: 'contradiction' } | { kind: 'unusable' }
+export type ReviewProblem = { kind: 'leak'; candidate: string } | { kind: 'contradiction' } | { kind: 'repeat' } | { kind: 'unusable' }
 
 /// Strip Markdown the prompt asked the model not to use, and reject an over-long draft.
 /// A first sentence that is only generic praise ("Good start writing each step out.") is filler: drop it.
@@ -363,6 +401,8 @@ export function reviewReply(text: string, req: TutorRequest, targets: CompiledTa
   const leak = findLeak(text, targets, studentWrote)
   if (leak) return { kind: 'leak', candidate: leak.candidate }
   if (contradictsChecker(text, req)) return { kind: 'contradiction' }
+  // The reply follows the can't-check sentence: saying it again reads as two canned messages.
+  if (opensWithCantCheck(req) && says(text, CANT_READ_OR_CHECK)) return { kind: 'repeat' }
   return null
 }
 
@@ -379,7 +419,17 @@ const CONCEPT: Record<ChainKind, (line: number) => string> = {
 export function fallbackHint(req: TutorRequest, rung: number): string {
   const state = checkerState(req)
   const v = req.verdict
+  if (state === 'unfinished' && v.kind === 'unfinished') {
+    const n = v.line, side = emptySide(req, n)
+    if (side === 'before') return `Line ${n} isn't finished yet: there's nothing before its equals sign. What did you start from?`
+    const ask = req.chain === 'derivative' || req.chain === 'integral' ? 'Which rule could you use to work out the left side?'
+      : req.chain === 'equation' && n > 1 ? `What goes on the right if you do the same thing to both sides of line ${n - 1}?`
+      : rung >= 3 ? 'Can you work out the left side one small step at a time?'
+      : 'What do you get when you work out the left side?'
+    return `Line ${n} isn't finished yet: there's nothing after its equals sign. ${ask}`
+  }
   if (state === 'unknown') {
+    if (opensWithCantCheck(req)) return 'Can you explain what you did in that step?'   // the reply already opens with cantCheckSentence
     const line = v.kind === 'unsupported' && req.corrections.length === 0 ? `line ${v.line}` : 'that step'
     return `My checker can't tell whether ${line} is right, so I won't guess. Can you explain what you did in that step?`
   }
@@ -390,7 +440,8 @@ export function fallbackHint(req: TutorRequest, rung: number): string {
   const n = v.kind === 'firstError' && v.line <= req.lines.length ? v.line : req.lines.length
   switch (rung) {
     case 1: return 'Go back through your working one line at a time: does each line really follow from the one above it?'
-    case 2: return `Look closely at line ${n}: if you put the same small number into it and into the line above, do they still agree?`
+    case 2: return n === 1 ? 'Look closely at line 1: do its two sides really come to the same value?'
+      : `Look closely at line ${n}: if you put the same small number into it and into the line above, do they still agree?`
     case 3: return CONCEPT[req.chain](n)
     default: return 'Try the same idea on a smaller problem you make up yourself: what is the simplest example you can think of?'
   }
@@ -413,7 +464,7 @@ export async function handleTutor(client: AnthropicClient, body: any, opts: Tuto
   if (!targets) return { status: 400, body: { error: 'invalid engine result' } }
 
   const rung = currentRung(req.thread)
-  const prefix = req.thread.length === 0 && req.verdict.kind === 'unsupported' ? cantCheckSentence(req.verdict) : ''
+  const prefix = opensWithCantCheck(req) && req.verdict.kind === 'unsupported' ? cantCheckSentence(req.verdict) : ''
   const finish = (reply: string, guard: GuardOutcome): TutorResult =>
     ({ status: 200, body: { reply: prefix ? `${prefix} ${reply}` : reply, rung, guard } })
 

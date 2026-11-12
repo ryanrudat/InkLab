@@ -64,6 +64,28 @@ final class TutorGuardTests: XCTestCase {
         XCTAssertNil(leak("Yes, 2x = 4!", work, studentAlsoWrote: ["2x = 4"]))
     }
 
+    func test_anUnfinishedLineProtectsItsValue() {
+        // "1+3=" with nothing after it: the student is working out 1 + 3, so its value is the answer.
+        XCTAssertEqual(problemFacts(["1+3="])?.chain, .expression)
+        XCTAssertNotNil(leak("You get 4.", ["1+3="]))
+        XCTAssertNotNil(leak("It's 2 + 2.", ["1+3="]))
+        XCTAssertNil(leak("What do you get when you put 1 and 3 together?", ["1+3="]))
+        XCTAssertNil(leak("What is 1 + 3?", ["1+3="]))
+        // Once they finish it ("1+3 = 4") it is still arithmetic, not an equation to solve.
+        XCTAssertEqual(problemFacts(["1+3 = 4"])?.chain, .expression)
+        XCTAssertEqual(problemFacts(["2x + 3 = 7", "2x ="])?.chain, .equation)
+        XCTAssertEqual(problemFacts(["d/dx(x^2) ="])?.chain, .derivative)
+        XCTAssertEqual(problemFacts(["∫ x dx ="])?.chain, .integral)
+    }
+
+    func test_finishingAnUnfinishedLine() {
+        XCTAssertEqual(completingUnfinished("1+3=", with: "4"), "1+3 = 4")
+        XCTAssertEqual(completingUnfinished("1+3 =", with: "= 4"), "1+3 = 4")
+        XCTAssertEqual(completingUnfinished("1+3=", with: "1 + 3 = 4"), "1 + 3 = 4")
+        XCTAssertEqual(completingUnfinished("= 7", with: "2x + 3"), "2x + 3 = 7")
+        XCTAssertEqual(completingUnfinished("=", with: "4"), "4")
+    }
+
     func test_asciiRenderingRoundTripsThroughTheParser() throws {
         for s in ["(x+1)^2", "-x/2 + 3/4", "2x·(x − 1)", "sin(x)^2", "x^(-1)"] {
             let e = try parseExpr(s.replacingOccurrences(of: "·", with: "*").replacingOccurrences(of: "−", with: "-"))

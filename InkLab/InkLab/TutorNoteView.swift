@@ -35,15 +35,25 @@ struct TutorNoteStyle {
     /// Room at the header's right for the note's ✕ (the host's close button, one per session).
     var closeInset: CGFloat = 30
 
+    /// "Write on the page": the highlighted space where the next ink is read as the reply.
+    var writeZoneTint: UIColor = Theme.sun
+    var writeZoneFill: UIColor = Theme.sun.withAlphaComponent(0.06)
+    var writeZoneHeight: CGFloat = 110
+    var writeZoneDash: [NSNumber] = [6, 4]
+
     static var current = TutorNoteStyle()
 }
 
+/// How the student answers from the note: in ink on the page, or typed.
+enum TutorReplyMode: Equatable { case write, type }
+
 /// The tutor's note in the page margin: the latest tutor message, with everything before it (earlier
 /// hints, the student's replies and the engine's check of each step) folded into an "N earlier" control,
-/// a Reply button, and a thin connector to the line it is about. Rendered from the session in the note's
-/// provenance — the note holds no state of its own beyond whether the thread is expanded.
+/// the two ways to reply (write on the page, or type), and a thin connector to the line it is about.
+/// Rendered from the session in the note's provenance — the note holds no state of its own beyond
+/// whether the thread is expanded.
 final class TutorNoteView: UIView {
-    var onReply: (() -> Void)?
+    var onReply: ((TutorReplyMode) -> Void)?
     /// Expanding/collapsing changes the note's height: the host re-fits itself.
     var onResize: (() -> Void)?
     /// The anchored line's right end, in this view's coordinates (set by the host; nil = no connector).
@@ -57,7 +67,8 @@ final class TutorNoteView: UIView {
     private let earlierButton = UIButton(type: .system)
     private var threadLabels: [UILabel] = []
     private let message = UILabel()
-    private let replyButton = UIButton(type: .system)
+    private let writeButton = UIButton(type: .system)
+    private let typeButton = UIButton(type: .system)
     private let connector = CAShapeLayer()
     private let anchorDot = CAShapeLayer()
 
@@ -71,10 +82,12 @@ final class TutorNoteView: UIView {
         earlierButton.contentHorizontalAlignment = .leading
         earlierButton.addAction(UIAction { [weak self] _ in self?.toggleEarlier() }, for: .touchUpInside)
         addSubview(earlierButton)
-        replyButton.accessibilityIdentifier = "tutorReply"
-        replyButton.contentHorizontalAlignment = .leading
-        replyButton.addAction(UIAction { [weak self] _ in self?.onReply?() }, for: .touchUpInside)
-        addSubview(replyButton)
+        for (button, id, mode) in [(writeButton, "tutorReplyWrite", TutorReplyMode.write), (typeButton, "tutorReplyType", .type)] {
+            button.accessibilityIdentifier = id
+            button.contentHorizontalAlignment = .leading
+            button.addAction(UIAction { [weak self] _ in self?.onReply?(mode) }, for: .touchUpInside)
+            addSubview(button)
+        }
         layer.insertSublayer(connector, at: 0)
         layer.addSublayer(anchorDot)
         applyStyle()
@@ -96,7 +109,7 @@ final class TutorNoteView: UIView {
         connector.fillColor = nil
         connector.lineWidth = s.connectorWidth
         anchorDot.fillColor = s.connectorColor.cgColor
-        for (button, title, symbol) in [(replyButton, "Reply", "arrowshape.turn.up.left")] {
+        for (button, title, symbol) in [(writeButton, "Write on the page", "pencil.tip"), (typeButton, "Type", "keyboard")] {
             var c = UIButton.Configuration.plain()
             c.title = title
             c.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
@@ -214,7 +227,13 @@ final class TutorNoteView: UIView {
             if isExpanded { for l in threadLabels { place(l, height: fit(l, inner)) } }
         }
         place(message, height: fit(message, inner))
-        place(replyButton, height: 24, width: 90)
+        // The two ways to reply, side by side.
+        let writeWidth = min(inner, ceil(writeButton.sizeThatFits(CGSize(width: inner, height: 24)).width))
+        if apply {
+            writeButton.frame = CGRect(x: s.padding, y: y, width: writeWidth, height: 24)
+            typeButton.frame = CGRect(x: s.padding + writeWidth + 16, y: y, width: max(0, inner - writeWidth - 16), height: 24)
+        }
+        y += 24 + s.spacing
         return ceil(y - s.spacing + s.padding)
     }
 
@@ -240,6 +259,61 @@ final class TutorNoteView: UIView {
 
     /// A tappable control at `point` (so the canvas can let it through while the lasso tool is active).
     func controlHit(_ point: CGPoint) -> UIView? {
-        [replyButton, earlierButton].first { !$0.isHidden && $0.frame.contains(point) }
+        [writeButton, typeButton, earlierButton].first { !$0.isHidden && $0.frame.contains(point) }
+    }
+}
+
+/// "Write on the page": the highlighted space next to the problem where the student's next ink is read as
+/// their reply. Ink passes straight through it to the canvas; only its ✕ (stop writing) takes a tap.
+final class TutorWriteZoneView: UIView {
+    var onCancel: (() -> Void)?
+    private let border = CAShapeLayer()
+    private let caption = UILabel()
+    private let cancel = UIButton(type: .system)
+    private var style: TutorNoteStyle { .current }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        accessibilityIdentifier = "tutorWriteZone"
+        layer.addSublayer(border)
+        caption.text = "Write your reply here. The tutor reads it when you pause."
+        caption.numberOfLines = 2
+        caption.accessibilityIdentifier = "tutorWriteHint"
+        addSubview(caption)
+        cancel.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
+        cancel.accessibilityLabel = "Stop writing a reply"
+        cancel.accessibilityIdentifier = "tutorWriteCancel"
+        cancel.addAction(UIAction { [weak self] _ in self?.onCancel?() }, for: .touchUpInside)
+        addSubview(cancel)
+        applyStyle()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func applyStyle() {
+        let s = style
+        border.strokeColor = s.writeZoneTint.cgColor
+        border.fillColor = s.writeZoneFill.cgColor
+        border.lineWidth = 1.5
+        border.lineDashPattern = s.writeZoneDash
+        caption.font = s.threadFont
+        caption.textColor = s.writeZoneTint
+        cancel.tintColor = s.writeZoneTint.withAlphaComponent(0.7)
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        applyStyle()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        border.path = UIBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerRadius: style.cornerRadius).cgPath
+        cancel.frame = CGRect(x: bounds.width - 34, y: 4, width: 30, height: 30)
+        caption.frame = CGRect(x: 12, y: 8, width: max(0, bounds.width - 52), height: 36)
+    }
+
+    /// Only the ✕ is interactive: the Pencil writes through the rest.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        cancel.frame.insetBy(dx: -6, dy: -6).contains(point) ? cancel : nil
     }
 }

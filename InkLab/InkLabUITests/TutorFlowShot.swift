@@ -2,10 +2,11 @@ import XCTest
 
 /// The Socratic tutor end to end, against the local mock proxy (`cd Server && npm run mock`): the real
 /// server — consent gate, hint ladder, answer-leak guard — with a scripted stand-in for Claude whose first
-/// draft leaks the answer. Write working → ＋ → Tutor → ONE margin note beside line 2 (never the leaked
-/// draft) → write a corrected step next to the problem → it's read, checked by the engine and answered in
-/// the same note, the earlier messages folded into "N earlier" → Another hint → a typed question → undo
-/// rewinds one message → ✕ closes the session, undo brings it back. Screenshots at each step.
+/// draft leaks the answer. Write working → the dock's Tutor button → ONE margin note beside line 2 (never
+/// the leaked draft) → "Write on the page" highlights a space → a corrected step written there is read,
+/// checked by the engine and answered in the same note, the earlier messages folded into "N earlier" →
+/// Type → Another hint → a typed question → undo rewinds one message → ✕ closes the session, undo brings
+/// it back. Screenshots at each step.
 ///
 /// Skipped unless the mock is running, so the regular UI test run is unaffected.
 final class TutorFlowShot: XCTestCase {
@@ -90,7 +91,6 @@ final class TutorFlowShot: XCTestCase {
             let y = 640.0 + Double(i) * 50
             stroke(app, from: CGPoint(x: 60, y: y), to: CGPoint(x: 60 + width, y: y + 6))
         }
-        app.buttons["insertMenu"].tap()
         app.buttons["tutor"].tap()
         let note = app.otherElements["tutorNote"]
         XCTAssertTrue(note.waitForExistence(timeout: 30))
@@ -104,6 +104,23 @@ final class TutorFlowShot: XCTestCase {
     func testTutorConversation() throws {
         let app = try launchIntoNewNotebook()
 
+        // Tutor is its own button in the dock (not in ＋), and the dock still fits a portrait iPad with the
+        // pen's colors and sizes showing.
+        XCTAssertTrue(app.buttons["tutor"].isHittable)
+        // The capsule runs from 16 pt before the grip to 16 pt after the collapse button.
+        let window = app.windows.firstMatch.frame
+        let grip = app.descendants(matching: .any)["dockGrip"].frame, collapse = app.buttons["collapseToolbar"].frame
+        let capsule = (start: grip.minX - 16, end: collapse.maxX + 16)
+        XCTAssertTrue(capsule.start >= window.minX && capsule.end <= window.maxX,
+                      "the dock (\(capsule.start)…\(capsule.end)) is wider than the window (\(window.width))")
+        shot("0-dock")
+        let plus = app.buttons["insertMenu"]
+        plus.tap()
+        XCTAssertTrue(app.buttons["insertCalculator"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "tutor").count, 1, "Tutor is still in the ＋ menu")
+        plus.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()   // close the menu
+        XCTAssertTrue(app.buttons["insertCalculator"].waitForNonExistence(timeout: 5))
+
         // Three lines of "working" (the mock reads them as 2x + 3 = 7 / 2x = 10 / x = 5).
         for (i, width) in [180.0, 120.0, 90.0].enumerated() {
             let y = 300.0 + Double(i) * 50
@@ -112,7 +129,6 @@ final class TutorFlowShot: XCTestCase {
 
         // ＋ → Tutor: one note in the margin beside line 2. The mock's first draft ("…you get x = 2")
         // must have been rejected by the proxy's guard.
-        app.buttons["insertMenu"].tap()
         app.buttons["tutor"].tap()
         let message = app.staticTexts["tutorMessage"]
         XCTAssertTrue(message.waitForExistence(timeout: 30), "the tutor's first message never appeared")
@@ -124,9 +140,16 @@ final class TutorFlowShot: XCTestCase {
         let first = message.label
         shot("1-first-hint")
 
-        // A corrected step written next to the problem: read (mock: "2x = 4"), checked by the red pen,
-        // answered in the SAME note; the earlier messages fold into "2 earlier".
-        stroke(app, from: CGPoint(x: 60, y: 470), to: CGPoint(x: 150, y: 476))
+        // Write on the page: a highlighted space under the problem. A corrected step written there is read
+        // (mock: "2x = 4"), checked by the red pen and answered in the SAME note; the earlier messages fold
+        // into "2 earlier", and the highlight goes away.
+        app.buttons["tutorReplyWrite"].tap()
+        let zone = app.otherElements["tutorWriteZone"]
+        XCTAssertTrue(zone.waitForExistence(timeout: 5), "Write on the page didn't highlight a space")
+        XCTAssertGreaterThan(zone.frame.minY, 300 + 100, "the write-here space must be under the working, not on it")
+        shot("2a-write-here")
+        let z = zone.frame
+        stroke(app, from: CGPoint(x: z.minX + 30, y: z.midY + 10), to: CGPoint(x: z.minX + 130, y: z.midY + 16))
         XCTAssertTrue(waitLabel(message) { $0 != first && (!self.isMock || $0.contains("Nice fix to line 2")) }, "the written reply was never answered")
         XCTAssertEqual(app.otherElements.matching(identifier: "tutorNote").count, 1, "one note per session, not one card per message")
         let earlier = app.buttons["tutorEarlier"]
@@ -135,12 +158,13 @@ final class TutorFlowShot: XCTestCase {
         let fixRow = app.staticTexts.matching(NSPredicate(format: "identifier == 'tutorThread' AND label CONTAINS 'You: 2x = 4'")).firstMatch
         if !fixRow.waitForExistence(timeout: 5) { debugDump(app, "thread-rows") }
         XCTAssertTrue(fixRow.exists && fixRow.label.contains("checks out"), "the engine's check isn't in the thread")
+        XCTAssertFalse(zone.exists, "the write-here space should close once the reply is read")
         shot("2-written-fix-thread-expanded")
         earlier.tap()   // fold it again
         XCTAssertTrue(waitLabel(earlier, timeout: 5) { $0.contains("2 earlier") })
 
-        // Reply → Another hint (the ladder climbs only because the student asked).
-        app.buttons["tutorReply"].tap()
+        // Type → Another hint (the ladder climbs only because the student asked).
+        app.buttons["tutorReplyType"].tap()
         if !app.alerts.firstMatch.waitForExistence(timeout: 5) { debugDump(app, "after-reply-tap") }
         XCTAssertTrue(app.alerts.buttons["Another hint"].waitForExistence(timeout: 5))
         app.alerts.buttons["Another hint"].tap()
@@ -149,7 +173,7 @@ final class TutorFlowShot: XCTestCase {
         shot("3-another-hint")
 
         // A typed QUESTION: checked by the engine but not added to the working, and no ladder reset.
-        app.buttons["tutorReply"].tap()
+        app.buttons["tutorReplyType"].tap()
         let field = app.alerts.textFields["tutorReplyField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.typeText("so is x = 2?")

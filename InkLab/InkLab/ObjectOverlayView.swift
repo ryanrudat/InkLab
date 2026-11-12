@@ -19,8 +19,8 @@ final class ObjectOverlayView: UIView {
     var onAnnotationChanged: ((UUID, Data?) -> Void)?
     /// Supplies a widget's saved annotation strokes when its host is (re)created.
     var annotationProvider: ((UUID) -> Data?)?
-    /// The user tapped Reply on a tutor callout — the canvas asks for a typed reply.
-    var onTutorReply: ((UUID) -> Void)?
+    /// The user chose how to reply on a tutor note: write on the page, or type.
+    var onTutorReply: ((UUID, TutorReplyMode) -> Void)?
 
     private var hosts: [UUID: ObjectHostView] = [:]
     private var scanView: UIView?
@@ -163,7 +163,7 @@ final class ObjectOverlayView: UIView {
                 host.onRecognizeAnnotation = { [weak self] id, img in self?.onRecognizeAnnotation?(id, img) }
                 host.onAnnotationChanged = { [weak self] id, data in self?.onAnnotationChanged?(id, data) }
                 host.onWebWidgetInteraction = { [weak self] id in self?.prioritizeWebWidget(id) }
-                host.onTutorReply = { [weak self] id in self?.onTutorReply?(id) }
+                host.onTutorReply = { [weak self] id, mode in self?.onTutorReply?(id, mode) }
                 addSubview(host)
                 hosts[snapshot.objectID] = host
                 host.setPencilErasesAnnotation(pencilErasesAnnotations)        // honor the live Eraser-tool state
@@ -299,7 +299,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     var onRecognizeAnnotation: ((UUID, UIImage) -> Void)?   // ƒ: recognize my writing → drive the widget
     var onAnnotationChanged: ((UUID, Data?) -> Void)?       // persist the per-widget annotation strokes
     var onWebWidgetInteraction: ((UUID) -> Void)?           // promote/touch the generated-widget LRU
-    var onTutorReply: ((UUID) -> Void)?                     // Reply on a tutor callout → typed reply
+    var onTutorReply: ((UUID, TutorReplyMode) -> Void)?     // a tutor note's Write / Type
 
     private static let minWidth: CGFloat = 120
     private static let minHeight: CGFloat = 90
@@ -625,7 +625,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             headerPan.isEnabled = true
         } else if kind == "tutor" {
             let note = TutorNoteView()
-            note.onReply = { [weak self] in guard let self else { return }; self.onTutorReply?(self.objectID) }
+            note.onReply = { [weak self] mode in guard let self else { return }; self.onTutorReply?(self.objectID, mode) }
             note.onResize = { [weak self] in self?.fitTutorNote() }
             tutorNote = note
             addSubview(note)

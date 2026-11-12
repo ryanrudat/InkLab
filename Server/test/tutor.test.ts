@@ -54,6 +54,7 @@ test('malformed requests are rejected without a model call', async () => {
     linearBody({ lines: [] }),
     linearBody({ chain: 'chemistry' }),
     linearBody({ verdict: { kind: 'firstError', line: 9, explanation: 'x' } }),
+    linearBody({ verdict: { kind: 'unfinished', line: 4 } }),
     linearBody({ protected: [{ kind: 'secret', value: 'x' }] }),
     linearBody({ thread: [{ role: 'tutor', text: 'hi' }] }),        // nothing to reply to
     linearBody({ thread: [{ role: 'student', text: 'x'.repeat(5000) }] }),
@@ -237,8 +238,85 @@ test('nothing readable to protect means no model call at all', async () => {
     lines: ['2x + @ = 7'], verdict: { kind: 'unsupported', line: 1, reason: 'couldn\'t read "2x + @ = 7"' }, protected: [],
   }))
   assert.equal(out.body.guard, 'fallback')
-  assert.match(String(out.body.reply), /^I can't check line 1/)
+  // The engine's "couldn't read" is its parser, not the handwriting: never passed on as "couldn't read".
+  assert.equal(out.body.reply, "My checker can't work with line 1 as it's written, so I won't guess whether it's right. Can you explain what you did in that step?")
   assert.equal(client.calls.length, 0)
+})
+
+// --- an unfinished line ("1+3=") -------------------------------------------------------------------------
+
+/// The user's live case: "1+3=" with nothing after the "=". Read fine; the step just isn't finished.
+const unfinishedBody = (extra: Record<string, unknown> = {}) => ({
+  session: adult,
+  lines: ['1+3='],
+  chain: 'expression',
+  verdict: { kind: 'unfinished', line: 1 },
+  protected: [{ kind: 'expression', value: '1 + 3' }],
+  thread: [],
+  ...extra,
+})
+
+const sentences = (text: string) => text.split(/(?<=[.?!])\s+/).map((x) => x.trim().toLowerCase()).filter(Boolean)
+
+test('"1+3=": an unfinished line gets one nudge to finish it, never "can\'t read" and never the value', async () => {
+  const finish = 'What do you get when you put 1 and 3 together?'
+  // A draft that calls it unreadable is rejected; the regeneration nudges them to finish the line.
+  let client = replying("I can't quite read line 1. Could you write it again?", finish)
+  let out = await handleTutor(client, unfinishedBody())
+  assert.deepEqual(out.body, { reply: finish, rung: 1, guard: 'regenerated' })
+  assert.match(client.calls[0].messages[0].content as string, /Line 1 is not finished: it has nothing after its equals sign yet/)
+  assert.doesNotMatch(client.calls[0].messages[0].content as string, /could NOT check/)
+
+  // Giving the value away, in any form, is a leak; both drafts leaking ends in the math-free nudge.
+  client = replying('Put them together and you get 4. What will you write?', 'It comes to 2 + 2, right?')
+  out = await handleTutor(client, unfinishedBody())
+  assert.equal(out.body.guard, 'fallback')
+  assert.equal(out.body.reply, "Line 1 isn't finished yet: there's nothing after its equals sign. What do you get when you work out the left side?")
+
+  // Saying there's a mistake is wrong too: nothing has been claimed yet.
+  const req = (parseTutorRequest(unfinishedBody()) as any).req as TutorRequest
+  assert.equal(contradictsChecker('There is a mistake on line 1. What did you do?', req), true)
+  assert.equal(contradictsChecker("My checker can't check line 1. What did you do?", req), true)
+  assert.equal(contradictsChecker(finish, req), false)
+
+  // Nothing readable to protect: no model call, and still the nudge, not "can't read".
+  client = replying(NUDGE)
+  out = await handleTutor(client, unfinishedBody({ protected: [] }))
+  assert.equal(client.calls.length, 0)
+  assert.doesNotMatch(String(out.body.reply), /read|can'?t check|won'?t guess/i)
+  assert.equal((String(out.body.reply).match(/\?/g) ?? []).length, 1)
+})
+
+test('an unfinished later step: the lines above checked out, and the nudge is about the missing side', async () => {
+  const body = unfinishedBody({ lines: ['2x + 3 = 7', '2x ='], chain: 'equation', verdict: { kind: 'unfinished', line: 2 },
+    protected: [{ kind: 'equation', value: '2x + 3 = 7' }] })
+  const out = await handleTutor(replying({ text: '', stopReason: 'refusal' }), body)
+  assert.equal(out.body.reply, "Line 2 isn't finished yet: there's nothing after its equals sign. What goes on the right if you do the same thing to both sides of line 1?")
+  const req = (parseTutorRequest(body) as any).req as TutorRequest
+  assert.match(buildTutorMessages(req, 'x')[0].content as string, /Line 2: 2x =/)
+})
+
+test('no reply repeats itself: the can\'t-check sentence appears once, with one question after it', async () => {
+  const body = linearBody({
+    lines: ['sqrt(2) sqrt(2) = x', '2 = x'],
+    verdict: { kind: 'unsupported', line: 2, reason: "contains functions/radicals I can't verify yet" },
+    protected: [{ kind: 'equation', value: 'sqrt(2) sqrt(2) = x' }],
+  })
+  // The live failure: the opening sentence, then a draft (or the fallback) saying the same thing again.
+  const repeats = "My checker can't tell whether line 2 is right, so I won't guess. What did you do there?"
+  for (const client of [replying(repeats, repeats), replying({ text: '', stopReason: 'refusal' })]) {
+    const out = await handleTutor(client, body)
+    const reply = String(out.body.reply)
+    assert.equal(out.body.guard, 'fallback')
+    assert.equal(reply.match(/won'?t guess/gi)?.length, 1, reply)
+    assert.equal(reply.match(/\?/g)?.length, 1, reply)
+    const said = sentences(reply)
+    assert.equal(new Set(said).size, said.length, reply)
+  }
+  // A draft that doesn't repeat it is kept after the sentence.
+  const out = await handleTutor(replying('What rule did you use to simplify the left side?'), body)
+  assert.equal(out.body.guard, 'clean')
+  assert.equal(String(out.body.reply).match(/won'?t guess/gi)?.length, 1)
 })
 
 test('the whole-request deadline ends a slow draft with 504', async () => {
@@ -335,6 +413,11 @@ test('every fallback hint is short and asks one question', () => {
     for (const chain of ['equation', 'expression', 'derivative', 'integral']) {
       const req = (parseTutorRequest(linearBody({ verdict, chain })) as any).req as TutorRequest
       for (let rung = 1; rung <= 4; rung++) assert.ok(cleanReply(fallbackHint(req, rung)), `${verdict.kind}/${chain}/${rung}`)
+      for (const lines of [['2x + 3 = 7', '2x ='], ['= 7', '2x = 4']]) {
+        const line = lines[0].startsWith('=') ? 1 : 2
+        const open = (parseTutorRequest(linearBody({ lines, chain, verdict: { kind: 'unfinished', line } })) as any).req as TutorRequest
+        for (let rung = 1; rung <= 4; rung++) assert.ok(cleanReply(fallbackHint(open, rung)), `unfinished/${chain}/${rung}`)
+      }
     }
   }
 })

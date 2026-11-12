@@ -52,6 +52,7 @@ struct TutorWireVerdict: Codable, Sendable, Equatable {
         case .firstError(let line, _, let explanation, let counterexample):
             kind = "firstError"; self.line = line; self.explanation = explanation; self.counterexample = counterexample
         case .unsupported(let line, let reason): kind = "unsupported"; self.line = line; self.reason = reason
+        case .unfinished(let line): kind = "unfinished"; self.line = line
         }
     }
 }
@@ -125,7 +126,8 @@ struct TutorSession: Codable, Sendable, Equatable {
         guard lines.count <= 30, lines.allSatisfy({ $0.count <= 200 }) else { return .failure(.tooLong) }
         let anchor: Int
         switch checkChain(lines) {
-        case .firstError(let line, _, _, _), .unsupported(let line, _): anchor = min(max(1, line), lines.count)
+        case .firstError(let line, _, _, _), .unsupported(let line, _), .unfinished(let line):
+            anchor = min(max(1, line), lines.count)
         case .allValid: anchor = lines.count
         }
         return .success(TutorSession(problem: problem, pageLines: lines,
@@ -180,11 +182,11 @@ struct TutorSession: Codable, Sendable, Equatable {
 
     // MARK: Checking a step the student writes back (deterministic)
 
-    /// Where a new step goes: in place of the first line that didn't follow (or couldn't be checked),
-    /// or after the last line when everything so far checks out.
+    /// Where a new step goes: in place of the first line that didn't follow (or couldn't be checked, or
+    /// isn't finished), or after the last line when everything so far checks out.
     var replaceFrom: Int {
         switch verdict {
-        case .firstError(let line, _, _, _), .unsupported(let line, _): return max(0, line - 1)
+        case .firstError(let line, _, _, _), .unsupported(let line, _), .unfinished(let line): return max(0, line - 1)
         case .allValid: return lines.count
         }
     }
@@ -218,8 +220,16 @@ struct TutorSession: Codable, Sendable, Equatable {
     /// Run the red pen on the student's new step(s) in context. Returns nil when the reply has no math.
     func checkAttempt(_ reply: String) -> (check: StepCheck, lines: [String])? {
         var attempt = Self.attemptLines(in: reply)
+        if attempt.isEmpty, case .unfinished = verdict,               // "is it 4?" answers "1 + 3 =" too
+           let last = extractTutorMath(reply).last(where: { if case .expression = $0 { return true }; return false }) {
+            attempt = [last.text]
+        }
         guard !attempt.isEmpty else { return nil }
         let prefix = Array(lines.prefix(replaceFrom))
+        // An answer to an unfinished line ("4" for "1 + 3 =") finishes that line, and is checked as such.
+        if case .unfinished(let line) = verdict, lines.indices.contains(line - 1) {
+            attempt[0] = completingUnfinished(lines[line - 1], with: attempt[0])
+        }
         // A one-line calculus claim ("d/dx(x^2) = x") corrected with just a result ("2x"): keep the claim.
         if prefix.isEmpty, let first = lines.first, let eq = first.firstIndex(of: "="),
            first.contains("∫") || first.contains("d/d"),
@@ -230,7 +240,7 @@ struct TutorSession: Codable, Sendable, Equatable {
         switch checkChain(candidate) {
         case .allValid: return (.follows, candidate)
         case .firstError: return (.doesNotFollow, lines)
-        case .unsupported: return (.cannotCheck, lines)
+        case .unsupported, .unfinished: return (.cannotCheck, lines)   // a reply that is itself unfinished: nothing to check yet
         }
     }
 
@@ -279,7 +289,9 @@ enum TutorGuard {
         switch session.verdict {
         case .firstError(let line, _, _, _) where line <= session.pageLines.count && session.corrections.isEmpty:
             return "Look again at line \(line): what did you do to get there from the line above?"
-        case .firstError, .unsupported:
+        case .unfinished(let line) where line <= session.pageLines.count:
+            return "Line \(line) isn't finished yet. What goes on the other side of its equals sign?"
+        case .firstError, .unsupported, .unfinished:
             return "My checker can't confirm that step yet, so I won't guess. What did you do in it?"
         case .allValid:
             return session.corrections.isEmpty ? "Every step so far checks out. What do you think comes next?"
@@ -454,6 +466,21 @@ enum TutorLayout {
     static func topZ(on page: PageProjection) -> FractionalIndex {
         let top = page.objects.values.filter { !$0.isDeleted }.map(\.z.rank).max() ?? "m"
         return FractionalIndex(max(top, "y") + "m")
+    }
+
+    /// Where "Write on the page" asks for the reply: a free strip under the problem (moved down past any
+    /// ink or object in the way), at least `minWidth` wide, inside the page.
+    static func writeZone(problem: CGRect, avoiding: [CGRect], canvasWidth: CGFloat,
+                          height: CGFloat = TutorNoteStyle.current.writeZoneHeight, minWidth: CGFloat = 300) -> CGRect {
+        let width = min(max(problem.width, minWidth), max(120, canvasWidth - 32))
+        let x = min(max(16, problem.minX), max(16, canvasWidth - 16 - width))
+        var zone = CGRect(x: x, y: problem.maxY + 12, width: width, height: height)
+        for _ in 0..<40 {
+            let hits = avoiding.filter { !$0.isNull && $0.insetBy(dx: -8, dy: -8).intersects(zone) }
+            guard let lowest = hits.map(\.maxY).max() else { break }
+            zone.origin.y = lowest + 16
+        }
+        return zone
     }
 
     /// Ink written here (after a pause) is a reply to the session: around the problem and its note.

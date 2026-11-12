@@ -148,12 +148,14 @@ private func renderVerdict(_ v: TutorVerdict) -> String {
     case .allValid(let steps):
         return "✓ All \(steps) step\(steps == 1 ? "" : "s") check out."
     case .firstError(let line, let kind, let explanation, let counterexample):
-        let what = kind == .notEqual ? "isn't equal to the line above" : "changes the solution set"
+        let what = line == 1 ? "isn't true" : kind == .notEqual ? "isn't equal to the line above" : "changes the solution set"
         var msg = "✗ Line \(line) \(what). \(explanation)"
         if let ce = counterexample { msg += " (e.g. \(ce))" }
         return msg
     case .unsupported(let line, let reason):
         return "… Couldn't check line \(line): \(reason)"
+    case .unfinished(let line):
+        return "… Line \(line) isn't finished yet."
     }
 }
 

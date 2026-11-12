@@ -89,7 +89,8 @@ Attest) + rate limiting are still pre-ship items.
   always means these), the engine's working after the student's verified fixes (`working`) and those fixes
   (`corrections: [{ line, from, to }]`, described to the model against the page), the red pen's verdict on
   `working`
-  (`allValid` / `firstError` + line, explanation, counterexample / `unsupported` + line, reason), the
+  (`allValid` / `firstError` + line, explanation, counterexample / `unsupported` + line, reason /
+  `unfinished` + line — a line ending in "=" with nothing after it, like "1+3="), the
   results the engine says must never be handed over (`expression` / `equation` / `antiderivative`, in the
   app's ASCII grammar), and the conversation so far (`{ role: 'tutor' | 'student', text, check?,
   wantsHint?, question? }`, replayed every turn: the proxy is stateless). Returns `{ reply, rung, guard }`.
@@ -106,7 +107,12 @@ Attest) + rate limiting are still pre-ship items.
   a rejected draft is regenerated once with a stricter instruction (`guard: "regenerated"`), and if that
   fails too — or the model refuses — a math-free generic hint is returned (`guard: "fallback"`). The
   rejected draft is never returned or shown back to the model. For an `unsupported` verdict the opening
-  reply starts with a fixed "I can't check line N … so I won't guess" sentence. With nothing in
+  reply starts with a fixed "I can't check line N … so I won't guess" sentence, said once (a draft that
+  says it again is rejected, and the fallback then only asks its question); the engine's "couldn't read"
+  reason is its parser, so it becomes "can't work with line N as it's written", never "couldn't read". An
+  `unfinished` line is neither unreadable nor a mistake: the model is told to help the student finish it
+  without saying what goes after the "=", and a draft saying it can't read or check the line, or that
+  there's a mistake, is rejected. With nothing in
   `protected` (the problem line itself was unreadable) no model is called. Errors: `400` malformed /
   `invalid engine result` (a protected value the guard can't parse), `403` consent, `502` upstream,
   `504` `tutor timed out` (45 s for both drafts; the app waits 50 s).

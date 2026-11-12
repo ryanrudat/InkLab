@@ -10,13 +10,15 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
 - All §12 foundational decisions resolved across ADRs 0001–0005. Git baseline committed.
 - **The deterministic "brain" plus the live make-real loop are now real in the app; remaining work is mostly compliance, persistence, on-device validation, and §6 interpreter UI.**
 - **Socratic tutor (2026-11-12):** **13 app unit tests** (`TutorTests`) + the `TutorFlowShot` UI run, **InkLabMath 32** (8 new), **43 proxy tests** for `/tutor` + the leak guard. Full suites green: app 48, packages 145, proxy 85. See below.
+  Updated the same day (unfinished lines, Write/Type replies, the dock button): **app 54, packages 149 (InkLabMath 36), proxy 95**.
 
 ### 🎓 Socratic tutor (2026-11-12)
 A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to
 it, never the answer or the corrected step. It builds on the red pen; nothing about correctness moved to
 a model.
 - **Entry points:** **Tutor** in the lasso selection menu (next to Recognize / Check work / Fit graph) and
-  in the `＋` menu (no lasso = the whole page's ink).
+  as its own **graduation-cap button in the dock**, next to Add sticky (no lasso = the whole page's ink).
+  It used to be in the `＋` menu.
 - **READ → COMPUTE → TALK.** The selection is read with the same `bestRead` path as Check work. The
   **verdict is `checkChain`** (first wrong line, reason, counterexample), and the new `problemFacts`
   (InkLabMath `TutorGuard.swift`) derives what must never be handed over: the problem's value, its
@@ -38,9 +40,22 @@ a model.
   re-asks strictly / falls back the same way. A lost-solution counterexample ("x = −2 is a solution…") is
   kept out of the prompt.
 - **Unsupported:** when the engine can't check a line, the reply starts with a fixed sentence ("I can't
-  check line N … so I won't guess whether it's right"), and the model is told not to judge it.
-- **Replies:** write next to the problem — after a pause the auto-scan reads new ink in the session's zone
-  (consent-gated, works even with auto-"@" off) — or tap **Reply** on a tutor callout to type one. Any math
+  check line N … so I won't guess whether it's right"), said **once**, and the model is told not to judge
+  it. The engine's "couldn't read …" is its parser, not the handwriting, so the student hears "my checker
+  can't work with line N as it's written".
+- **Unfinished lines (fix from a live run):** "1+3=" used to come back as "couldn't read", followed by a
+  second canned sentence saying the same thing. `checkChain` now reports **`.unfinished(line:)`** for a
+  line ending in "=" (or line 1 starting with one), after checking the lines above it. The tutor nudges
+  the student to finish it ("What do you get when you put those two numbers together?") without the value,
+  which stays protected (`problemFacts` reads "1+3" without its "="). The student's answer finishes the
+  line and is checked as such ("4" → "1+3 = 4" ✓, "5" ✗). For that, a variable-free line 1 ("1 + 3 = 5")
+  is now checked as true or false; before, a one-line equation always passed. Check work shows
+  "Line N isn't finished yet" too.
+- **Replies:** the note offers both. **Write on the page** highlights a free space under the problem
+  (switching to the pen if needed); after a pause the auto-scan reads the ink written there as the reply
+  and the highlight goes away (✕ on it cancels). Writing anywhere else near the problem still counts too,
+  as before (consent-gated, works even with auto-"@" off). **Type** opens a text field (Send / Another
+  hint). Any math
   in a reply is **checked by the red pen** in context ("You: 2x = 4 ✓ checks out"); a verified step
   replaces the wrong line. Prose is just a message.
 - **On the page (layout A, the margin note):** one note per session in the right margin, level with the
@@ -48,7 +63,7 @@ a model.
   band so it **never covers the student's writing or another object** (a widget's controls, a sticky), and
   below them if the margin is full; it is drawn above every other object. Only the latest tutor
   message shows; earlier hints, the student's replies and the engine's check of each step ("You: 2x = 4
-  ✓ checks out") fold into an **"N earlier"** control. One ✕ closes the session; Reply stays on the note.
+  ✓ checks out") fold into an **"N earlier"** control. One ✕ closes the session; Write on the page and Type stay on the note.
   The note is ONE journal object: each message replaces its payload (`promote` + resize, one undo step),
   so **undo rewinds the conversation a message at a time**, ✕ is undoable, and it survives relaunch. All
   of its colours, fonts and shapes live in `TutorNoteStyle` (`TutorNoteView.swift`), neutral until the

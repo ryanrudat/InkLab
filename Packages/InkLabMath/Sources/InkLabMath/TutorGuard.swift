@@ -31,9 +31,15 @@ public struct ProblemFacts: Equatable, Sendable {
 
 /// What the tutor must protect for this working, from its first line. nil when line 1 can't be read
 /// (then there is nothing to check a reply against, and the proxy answers without a model call).
+/// An unfinished line 1 ("1 + 3 =") is read without its dangling "=", so its value is protected; an
+/// arithmetic line ("1 + 3 = 4") is an expression being worked out, not an equation to solve.
 public func problemFacts(_ rawLines: [String]) -> ProblemFacts? {
     let lines = rawLines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    guard let first = lines.first, let form = try? parseLine(first) else { return nil }
+    guard let first = lines.first.map({ $0.hasSuffix("=") ? withoutDanglingEquals($0) : $0 }),
+          let form = try? parseLine(first) else { return nil }
+    if case .equation(let l, let r) = form, isArithmetic(l), isArithmetic(r) {
+        return ProblemFacts(chain: .expression, protected: [.expression(l)])
+    }
     switch form {
     case .integralClaim(let f, let v, _):
         return ProblemFacts(chain: .integral, protected: [.antiderivative(integrand: f, variable: v)])
@@ -46,6 +52,11 @@ public func problemFacts(_ rawLines: [String]) -> ProblemFacts? {
     case .continuation:
         return nil
     }
+}
+
+private func isArithmetic(_ e: Expr) -> Bool {
+    let rf = canonicalize(e)
+    return rf.num.atoms.isEmpty && rf.den.atoms.isEmpty
 }
 
 // MARK: - Exact "does this give the answer away?"
