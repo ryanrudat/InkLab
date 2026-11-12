@@ -51,8 +51,10 @@ railway up                                            # Railpack build (Node 24 
 railway domain                                        # generate the public HTTPS URL
 ```
 
-`railway.json` selects Railpack, pins the start command, and verifies `GET /health` before a deployment
-becomes active. `.nvmrc` pins Node 24.18.0. Railway injects `PORT` (the server already reads it); no
+`.railway/railway.ts` (Railway's infrastructure-as-code file, which replaced `railway.json` in Nov 2026) selects
+Railpack, pins the start command, and verifies `GET /health` before a deployment becomes active; preview a change
+with `railway config plan`, apply it with `railway config apply`. Variables are not managed there (they stay in
+the Railway dashboard). `.nvmrc` pins Node 24.18.0. Railway injects `PORT` (the server already reads it); no
 `.env` is uploaded (gitignored + `.railwayignore`). After deploy, create the app's ignored
 `InkLab/Info.local.plist` + `InkLab/Secrets.xcconfig` overrides as described in the root README, then
 set **`MakeRealBaseURL`** to the `railway domain` URL.

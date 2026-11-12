@@ -188,7 +188,7 @@ sections are unchanged. One client-side gap from 2026-06-08 has been partially c
 - **In-app account deletion** (§5.1.1(v)) — only per-notebook delete exists, not account/data wipe.
 - **Files/iCloud-Drive export + CloudKit backup** (ADR 0006) — not yet built; storage is still the
   on-device file journal (CloudKit noted as "later" behind the storage protocol).
-- **Hosting is still interim (Railway).** Config present (`railway.json`, `.nvmrc`, `.railwayignore`);
+- **Hosting is still interim (Railway).** Config present (`.railway/railway.ts`, `.nvmrc`, `.railwayignore`);
   data-residency-for-minors / ZDR not settled on Railway. Revisit before publication.
 - **Legal counsel sign-off** on the items marked 🔴.
 
