@@ -296,6 +296,35 @@ test('an unfinished later step: the lines above checked out, and the nudge is ab
   assert.match(buildTutorMessages(req, 'x')[0].content as string, /Line 2: 2x =/)
 })
 
+test('a line the student FINISHED is not a fix: told to the model as finished, and "fix" wording is rejected', async () => {
+  // The live case: "1+3=", then a reply of 4. The replies said "Nice fix … checks out" and "finished it with your fix".
+  const body = unfinishedBody({
+    working: ['1+3 = 4'],
+    corrections: [{ line: 1, from: ['1+3='], to: ['1+3 = 4'] }],
+    verdict: { kind: 'allValid', steps: 1 },
+    thread: [{ role: 'tutor', text: 'What do you get when you put 1 and 3 together?' }, { role: 'student', text: '4', check: 'follows' }],
+  })
+  const req = (parseTutorRequest(body) as any).req as TutorRequest
+  assert.equal(contradictsChecker('Nice fix: 1 + 3 = 4 checks out. What would you like to try next?', req), true)
+  assert.equal(contradictsChecker('You finished it with your fix. What next?', req), true)
+  assert.equal(contradictsChecker('1 + 3 = 4 checks out. What would you like to try next?', req), false)
+  assert.equal(contradictsChecker('Your working is all correct. What would you like to try next?', req), false)   // nothing was wrong
+
+  const client = replying('Nice fix: 1 + 3 = 4 checks out. What would you like to try next?', '1 + 3 = 4 checks out. What would you like to try next?')
+  const out = await handleTutor(client, body)
+  assert.deepEqual(out.body, { reply: '1 + 3 = 4 checks out. What would you like to try next?', rung: 1, guard: 'regenerated' })
+  const context = client.calls[0].messages[0].content as string
+  assert.match(context, /The student finished line 1 \(on the page: 1\+3=\) as 1\+3 = 4, in a reply\. .*not a fix or a correction/)
+  assert.match(context, /After the student finished their working/)
+  assert.doesNotMatch(context, /corrected line|ORIGINAL working/)
+
+  // A real correction can still be called a fix.
+  const fixed = (parseTutorRequest(linearBody({
+    working: ['2x + 3 = 7', '2x = 4'], corrections: [{ line: 2, from: ['2x = 10', 'x = 5'], to: ['2x = 4'] }], verdict: { kind: 'allValid', steps: 2 },
+  })) as any).req as TutorRequest
+  assert.equal(contradictsChecker('Nice fix to line 2. What could you do next?', fixed), false)
+})
+
 test('no reply repeats itself: the can\'t-check sentence appears once, with one question after it', async () => {
   const body = linearBody({
     lines: ['sqrt(2) sqrt(2) = x', '2 = x'],

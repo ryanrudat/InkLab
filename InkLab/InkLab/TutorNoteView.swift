@@ -1,4 +1,5 @@
 import UIKit
+import InkLabKit
 
 /// Everything the tutor's margin note looks like — colours, fonts, shapes, spacing — in one place, so the
 /// app theme can restyle it without touching layout code. Styled from `Theme`: the tutor wears the sun
@@ -44,8 +45,9 @@ struct TutorNoteStyle {
     static var current = TutorNoteStyle()
 }
 
-/// How the student answers from the note: in ink on the page, or typed.
-enum TutorReplyMode: Equatable { case write, type }
+/// What the student does from the note: answer in ink on the page or typed, or correct what was read.
+/// On a note for a problem that couldn't be read, `write` / `type` rewrite or type the problem itself.
+enum TutorReplyMode: Equatable { case write, type, fixReading }
 
 /// The tutor's note in the page margin: the latest tutor message, with everything before it (earlier
 /// hints, the student's replies and the engine's check of each step) folded into an "N earlier" control,
@@ -64,6 +66,8 @@ final class TutorNoteView: UIView {
     private var provenance: TutorCalloutProvenance?
 
     private let header = UILabel()
+    /// "I read: 7 + 3 =": what the reading came back as, quiet, tap to correct it.
+    private let readAsButton = UIButton(type: .system)
     private let earlierButton = UIButton(type: .system)
     private var threadLabels: [UILabel] = []
     private let message = UILabel()
@@ -78,6 +82,12 @@ final class TutorNoteView: UIView {
         for l in [header, message] { l.numberOfLines = 0; addSubview(l) }
         header.accessibilityIdentifier = "tutorHeader"
         message.accessibilityIdentifier = "tutorMessage"
+        readAsButton.accessibilityIdentifier = "tutorReadAs"
+        readAsButton.contentHorizontalAlignment = .leading
+        readAsButton.titleLabel?.numberOfLines = 2
+        readAsButton.titleLabel?.lineBreakMode = .byTruncatingTail
+        readAsButton.addAction(UIAction { [weak self] _ in self?.onReply?(.fixReading) }, for: .touchUpInside)
+        addSubview(readAsButton)
         earlierButton.accessibilityIdentifier = "tutorEarlier"
         earlierButton.contentHorizontalAlignment = .leading
         earlierButton.addAction(UIAction { [weak self] _ in self?.toggleEarlier() }, for: .touchUpInside)
@@ -109,7 +119,9 @@ final class TutorNoteView: UIView {
         connector.fillColor = nil
         connector.lineWidth = s.connectorWidth
         anchorDot.fillColor = s.connectorColor.cgColor
-        for (button, title, symbol) in [(writeButton, "Write on the page", "pencil.tip"), (typeButton, "Type", "keyboard")] {
+        let unread = provenance?.tutor.isUnread == true
+        for (button, title, symbol) in [(writeButton, unread ? "Rewrite it" : "Write on the page", "pencil.tip"),
+                                        (typeButton, unread ? "Type it" : "Type", "keyboard")] {
             var c = UIButton.Configuration.plain()
             c.title = title
             c.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
@@ -127,6 +139,7 @@ final class TutorNoteView: UIView {
         super.traitCollectionDidChange(previous)
         applyStyle()   // CGColors don't follow dark mode on their own
         configureEarlierButton()
+        configureReadAs()
     }
 
     // MARK: Content
@@ -138,14 +151,34 @@ final class TutorNoteView: UIView {
 
     func configure(_ p: TutorCalloutProvenance) {
         provenance = p
-        header.text = "Tutor · hint \(p.tutor.rung) of \(TutorSession.maxRung)"
+        header.text = Self.headerText(p.tutor)
         message.text = latestIndex.map { thread[$0].text } ?? ""
         threadLabels.forEach { $0.removeFromSuperview() }
         threadLabels = earlier.map(makeThreadLabel)
         threadLabels.forEach(addSubview)
         if earlier.isEmpty { isExpanded = false }
         configureEarlierButton()
+        configureReadAs()
+        applyStyle()   // the reply buttons' titles depend on whether the problem could be read
         setNeedsLayout()
+    }
+
+    /// "Tutor · hint 2 of 4" while there's something to find; once the working checks out the hint count
+    /// means nothing, and a problem that couldn't be read has no hints yet.
+    static func headerText(_ session: TutorSession) -> String {
+        if session.isUnread { return "Tutor" }
+        if case .allValid(_) = session.verdict { return "Tutor · your working checks out" }
+        return "Tutor · hint \(session.rung) of \(TutorSession.maxRung)"
+    }
+
+    private func configureReadAs() {
+        let s = style, read = provenance?.tutor.readAs ?? ""
+        readAsButton.isHidden = read.isEmpty
+        let title = NSMutableAttributedString(string: "I read: \(read)", attributes: [.font: s.threadFont, .foregroundColor: s.threadColor])
+        title.append(NSAttributedString(string: "  ✎", attributes: [.font: s.threadFont, .foregroundColor: s.controlTint]))
+        readAsButton.setAttributedTitle(title, for: .normal)
+        readAsButton.accessibilityLabel = "I read: \(read)"
+        readAsButton.accessibilityHint = "Correct what the tutor read"
     }
 
     private func makeThreadLabel(_ turn: TutorTurn) -> UILabel {
@@ -222,6 +255,12 @@ final class TutorNoteView: UIView {
         func fit(_ l: UILabel, _ w: CGFloat) -> CGFloat { ceil(l.sizeThatFits(CGSize(width: w, height: .greatestFiniteMagnitude)).height) }
 
         place(header, height: fit(header, inner - s.closeInset), width: inner - s.closeInset)
+        if !readAsButton.isHidden {
+            let measure = UILabel()                  // the button's own label may not have its text yet
+            measure.numberOfLines = 2                // at most two lines, then "…"
+            measure.attributedText = readAsButton.attributedTitle(for: .normal)
+            place(readAsButton, height: fit(measure, inner))
+        }
         if !earlier.isEmpty {
             place(earlierButton, height: 20)
             if isExpanded { for l in threadLabels { place(l, height: fit(l, inner)) } }
@@ -248,6 +287,8 @@ final class TutorNoteView: UIView {
             path.move(to: CGPoint(x: min(max(a.x, 14), bounds.width - 14), y: 0))
         } else if a.x > bounds.width {
             path.move(to: CGPoint(x: bounds.width, y: min(max(a.y, 14), bounds.height - 14)))
+        } else if a.y > bounds.height {
+            path.move(to: CGPoint(x: min(max(a.x, 14), bounds.width - 14), y: bounds.height))
         } else {
             connector.path = nil; anchorDot.path = nil; return    // the note sits on the line's end: nothing to draw
         }
@@ -259,7 +300,7 @@ final class TutorNoteView: UIView {
 
     /// A tappable control at `point` (so the canvas can let it through while the lasso tool is active).
     func controlHit(_ point: CGPoint) -> UIView? {
-        [writeButton, typeButton, earlierButton].first { !$0.isHidden && $0.frame.contains(point) }
+        [writeButton, typeButton, readAsButton, earlierButton].first { !$0.isHidden && $0.frame.contains(point) }
     }
 }
 
@@ -272,11 +313,14 @@ final class TutorWriteZoneView: UIView {
     private let cancel = UIButton(type: .system)
     private var style: TutorNoteStyle { .current }
 
-    override init(frame: CGRect) {
+    static let replyCaption = "Write your reply here. The tutor reads it when you pause."
+    static let rewriteCaption = "Write the problem again here, a little larger. The tutor reads it when you pause."
+
+    init(frame: CGRect, caption text: String = TutorWriteZoneView.replyCaption) {
         super.init(frame: frame)
         accessibilityIdentifier = "tutorWriteZone"
         layer.addSublayer(border)
-        caption.text = "Write your reply here. The tutor reads it when you pause."
+        caption.text = text
         caption.numberOfLines = 2
         caption.accessibilityIdentifier = "tutorWriteHint"
         addSubview(caption)

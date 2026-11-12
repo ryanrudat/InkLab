@@ -112,7 +112,9 @@ Attest) + rate limiting are still pre-ship items.
   reason is its parser, so it becomes "can't work with line N as it's written", never "couldn't read". An
   `unfinished` line is neither unreadable nor a mistake: the model is told to help the student finish it
   without saying what goes after the "=", and a draft saying it can't read or check the line, or that
-  there's a mistake, is rejected. With nothing in
+  there's a mistake, is rejected. A correction whose `from` starts with an unfinished line is a line the
+  student finished, not fixed: it's described that way, and with only such corrections a draft that says
+  "fix" or "correction" is rejected. With nothing in
   `protected` (the problem line itself was unreadable) no model is called. Errors: `400` malformed /
   `invalid engine result` (a protected value the guard can't parse), `403` consent, `502` upstream,
   `504` `tutor timed out` (45 s for both drafts; the app waits 50 s).
@@ -120,7 +122,8 @@ Attest) + rate limiting are still pre-ship items.
 
 `npm run mock` (`scripts/mock-proxy.ts`) runs this same server with a scripted fake Claude on `:8799` for
 Simulator UI runs: canned recognition, and a tutor whose first draft leaks the answer so the guard is
-exercised.
+exercised. While it runs, `POST /mock/read {"math": "7+3="}` changes what the problem reads as (`""` = nothing
+readable) and `{}` restores the default; the tutor UI tests use it for the misreading and unreadable cases.
 
 ## The tested core (`src/`)
 - `consent.ts` — `cloudEligible(session)`; mirrors the Swift `DefaultCloudPolicy`. The server enforces

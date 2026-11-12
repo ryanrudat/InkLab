@@ -250,6 +250,54 @@ struct TutorTests {
         #expect(collapsed >= first)   // one control taller than the first message's note, not one card per message
     }
 
+    @Test func theNoteSaysWhatWasReadAndACorrectedReadingStartsOver() throws {
+        // A hooked "1" read as a 7: the note shows the reading, so the student can catch it.
+        var s = session("7+3=")
+        s.thread.append(TutorTurn(role: .tutor, text: "Can you start at 7 and count up 3 more?"))
+        s = s.addingStudentReply("hmm", wantsHint: true)
+        s.thread.append(TutorTurn(role: .tutor, text: "What do you get?"))
+        s.rung = 2
+        let note = TutorNoteView(frame: CGRect(x: 0, y: 0, width: 280, height: 10))
+        note.configure(TutorCalloutProvenance(tutor: s, turn: 2))
+        note.frame.size.height = note.fittingHeight(width: 280)
+        note.layoutIfNeeded()
+        let readAs = try #require(note.subviews.first { $0.accessibilityIdentifier == "tutorReadAs" } as? UIButton)
+        #expect(!readAs.isHidden && readAs.accessibilityLabel == "I read: 7+3=")
+        #expect(readAs.frame.height > 0 && note.controlHit(CGPoint(x: readAs.frame.midX, y: readAs.frame.midY)) === readAs)
+        #expect(TutorSession(problem: problem, pageLines: ["2x + 3 = 7", "2x = 10"], lineRects: [], anchorLine: 1,
+                             lines: ["2x + 3 = 7", "2x = 10"]).readAs == "2x + 3 = 7  ·  2x = 10")
+
+        // Correcting it starts the same session over: same note (id), a fresh verdict and hint 1, no thread
+        // and no corrections (they fixed the reading, not their work).
+        let fixed = try s.restarted(read: "1+3=", strokes: []).get()
+        #expect(fixed.id == s.id && fixed.pageLines == ["1+3="] && fixed.verdict == .unfinished(line: 1))
+        #expect(fixed.thread.isEmpty && fixed.corrections.isEmpty && fixed.rung == 1)
+        #expect(s.restarted(read: "  ", strokes: []) == .failure(.nothingRead))
+    }
+
+    @Test func anUnreadableProblemGetsANoteThatOffersToRewriteOrTypeIt() throws {
+        let unread = TutorSession.unread(problem: problem)
+        #expect(unread.isUnread && unread.anchorRect == problem && unread.readAs.isEmpty)
+        let note = TutorNoteView(frame: CGRect(x: 0, y: 0, width: 280, height: 10))
+        note.configure(TutorCalloutProvenance(tutor: unread, turn: 1))
+        func view<T: UIView>(_ id: String) -> T? { note.subviews.first { $0.accessibilityIdentifier == id } as? T }
+        #expect((view("tutorMessage") as UILabel?)?.text == TutorSession.unreadMessage)
+        #expect((view("tutorHeader") as UILabel?)?.text == "Tutor")
+        #expect((view("tutorReadAs") as UIButton?)?.isHidden == true)
+        #expect((view("tutorReplyWrite") as UIButton?)?.configuration?.title == "Rewrite it")
+        #expect((view("tutorReplyType") as UIButton?)?.configuration?.title == "Type it")
+        // Typing (or rewriting) it starts the session for real, in the same note.
+        let started = try unread.restarted(read: "2x + 3 = 7\n2x = 10", strokes: []).get()
+        #expect(started.id == unread.id && !started.isUnread && started.pageLines.count == 2)
+    }
+
+    @Test func theHeaderStopsCountingHintsOnceTheWorkingChecksOut() {
+        let wrong = session("2x + 3 = 7\n2x = 10")
+        #expect(TutorNoteView.headerText(wrong) == "Tutor · hint 1 of 4")
+        let finished = session("1+3=").addingStudentReply("4", wantsHint: false)
+        #expect(TutorNoteView.headerText(finished) == "Tutor · your working checks out")
+    }
+
     /// The journal is the source of truth: a session is ONE note object; each message replaces its payload
     /// (one undo step), so undo rewinds the conversation a message at a time and closing removes it.
     @Test func theConversationLivesInTheJournalAndUndoRewindsIt() {

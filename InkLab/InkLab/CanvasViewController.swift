@@ -176,9 +176,12 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         overlay.onAnnotationChanged = { [weak self] id, data in self?.enqueueInkData(data ?? Data(), page: id) }
         overlay.annotationProvider = { [weak self] id in self?.loadInkData(page: id) }
         overlay.onTutorReply = { [weak self] id, mode in
+            guard let self else { return }
             switch mode {
-            case .write: self?.openTutorWriteZone(calloutID: id)
-            case .type: self?.promptTutorReply(calloutID: id)
+            case .write: self.openTutorWriteZone(calloutID: id)
+            case .type where self.tutorSession(of: id)?.isUnread == true: self.promptTutorReading(calloutID: id)
+            case .type: self.promptTutorReply(calloutID: id)
+            case .fixReading: self.promptTutorReading(calloutID: id)
             }
         }
         store.onPersistenceError = { [weak self] error in self?.reportPersistenceFailure(error) }
@@ -653,9 +656,12 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private func bestRead(_ input: RecognitionInput) async -> RecognitionResult? {
         if makeRealSession.blockReason == nil {            // consent granted → cloud is opt-in, allowed
             cloudRecognizer.session = makeRealSession      // send the REAL session (server re-checks it)
-            if let r = try? await cloudRecognizer.recognize(input),
-               !r.readAs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return r
+            if let r = try? await cloudRecognizer.recognize(input) {
+                // Claude answered. An empty reading is its deliberate "can't read this confidently" (the
+                // server asks for exactly that), so trust it: on-device Vision's guess at the same scrawl is
+                // worse, and would start a tutor session (or run a command) on junk. Vision is the fallback
+                // only when the cloud read fails (offline, server error) or isn't allowed.
+                return r.readAs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : r
             }
         }
         guard !Task.isCancelled else { return nil }
@@ -736,9 +742,18 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             let read = (await self.bestRead(input))?.readAs.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             self.overlay.hideScan()
             guard !Task.isCancelled, !self.isDismissing else { return }
+            // A note already saying it couldn't read this problem is picked up again, not duplicated.
+            let unread = TutorLayout.sessions(on: self.store.pageProjection(originPage)).map(\.latest.provenance.tutor)
+                .first { $0.isUnread && $0.problem.intersects(region) }
             switch TutorSession.start(read: read, problem: region, strokes: strokeBounds) {
+            case .failure(.nothingRead):
+                // Not a vanishing toast: a note at the problem that stays until they rewrite or type it.
+                if unread == nil { self.putTutorNote(.unread(problem: region), text: TutorSession.unreadMessage, page: originPage) }
+                self.onStatus?("")
             case .failure(let error): self.onStatus?(error.message)
-            case .success(let session):
+            case .success(var session):
+                if let unread { session.id = unread.id }
+                guard !self.tutorBusy.contains(session.id) else { return }
                 self.tutorBusy.insert(session.id)
                 await self.requestTutorMessage(session, page: originPage)
             }
@@ -803,7 +818,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let session = provenance.tutor
         let avoid = TutorLayout.obstacles(ink: canvasView.drawing.strokes.map(\.renderBounds), page: store.page, except: nil)
         let rect = TutorLayout.writeZone(problem: session.problem, avoiding: avoid, canvasWidth: view.bounds.width)
-        let zoneView = TutorWriteZoneView(frame: rect)
+        let zoneView = TutorWriteZoneView(frame: rect, caption: session.isUnread ? TutorWriteZoneView.rewriteCaption : TutorWriteZoneView.replyCaption)
         zoneView.onCancel = { [weak self] in self?.closeTutorWriteZone() }
         overlay.addSubview(zoneView)
         tutorWriteZone = (session: session.id, page: store.pageID, rect: rect, view: zoneView)
@@ -812,7 +827,91 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         pendingAutoScan?.cancel(); pendingAutoScan = nil
         consumedStrokeCount = canvasView.drawing.strokes.count
         canvasView.scrollRectToVisible(rect.insetBy(dx: -24, dy: -24), animated: true)
-        onStatus?("Write your reply in the highlighted space — the tutor reads it when you pause.")
+        onStatus?(session.isUnread ? "Write the problem again in the highlighted space — the tutor reads it when you pause."
+                                   : "Write your reply in the highlighted space — the tutor reads it when you pause.")
+    }
+
+    /// The tutor session a note belongs to (its state rides in the note's provenance).
+    private func tutorSession(of calloutID: UUID) -> TutorSession? {
+        guard let obj = store.page.objects[calloutID], case .callout(_, _, let json) = obj.payload else { return nil }
+        return TutorCalloutProvenance.decode(json)?.tutor
+    }
+
+    /// "I read: …" tapped (or Type it, on a problem that couldn't be read): type the problem as it really
+    /// is, prefilled with what was read. The session starts over from it.
+    private func promptTutorReading(calloutID: UUID) {
+        guard let session = tutorSession(of: calloutID) else { return }
+        let page = store.pageID
+        closeTutorWriteZone()
+        let alert = UIAlertController(
+            title: session.isUnread ? "Type the problem" : "Fix what I read",
+            message: session.isUnread ? "Type the problem and your working. Put ; between lines, like 2x + 3 = 7; 2x = 4."
+                                      : "Change anything I misread. Put ; between lines. The tutor starts again from what you type.",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = session.pageLines.joined(separator: "; ")
+            field.placeholder = "2x + 3 = 7; 2x = 4"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.accessibilityIdentifier = "tutorReadingField"
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        let start = UIAlertAction(title: "Start", style: .default) { [weak self, weak alert] _ in
+            let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty, TutorSession.steps(from: text) != session.pageLines else { return }
+            self?.restartTutor(session, read: text, page: page)
+        }
+        alert.addAction(start)
+        alert.preferredAction = start
+        present(alert, animated: true)
+    }
+
+    /// Start `old`'s conversation over on a new reading (typed, corrected or re-read): same note, fresh
+    /// verdict, hint 1. A reading that is still empty leaves the note as it is.
+    private func restartTutor(_ old: TutorSession, read: String, problem: CGRect? = nil, page: UUID) {
+        if let reason = makeRealSession.tutorBlockReason { onStatus?(reason); return }
+        let ink = (page == store.pageID ? canvasView.drawing : loadedInk(page)).strokes.map(\.renderBounds)
+        switch old.restarted(read: read, problem: problem, strokes: ink) {
+        case .failure(.nothingRead):
+            onStatus?("Still couldn't read it — try writing a little larger, or tap Type it.")
+        case .failure(let error):
+            onStatus?(error.message)
+        case .success(let fresh):
+            guard !tutorBusy.contains(fresh.id) else { onStatus?("The tutor is still answering — try again in a moment."); return }
+            pendingTutorReplies[fresh.id] = nil          // replies to the old reading don't apply any more
+            tutorBusy.insert(fresh.id)
+            startTrackedTask { [weak self] in await self?.requestTutorMessage(fresh, page: page) }
+        }
+    }
+
+    /// New ink by a note that couldn't read its problem: read the problem again, the new ink on its own if
+    /// it was written beside the old (a fresh copy), or together with it if written over it (a touch-up).
+    private func rereadTutorProblem(_ session: TutorSession, newInk: CGRect, firedCount: Int, page: UUID) {
+        let drawing = canvasView.drawing
+        let region = (newInk.intersects(session.problem) ? session.problem.union(newInk) : newInk).insetBy(dx: -12, dy: -12)
+        guard !region.isNull, region.width > 1, region.height > 1,
+              let raster = PencilKitAdapters.raster(drawing, region: region) else { consumedStrokeCount = firedCount; return }
+        let input = RecognitionInput(
+            strokes: PencilKitAdapters.strokes(drawing), raster: raster,
+            region: Rect(x: Double(region.minX), y: Double(region.minY), width: Double(region.width), height: Double(region.height)),
+            domainHint: .math,
+            session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
+        autoScanBusy = true
+        onStatus?("Reading your working…")
+        overlay.showScan(in: region)
+        startTrackedTask { [weak self] in
+            guard let self else { return }
+            defer {
+                self.autoScanBusy = false
+                if self.autoScanNeedsRetry { self.autoScanNeedsRetry = false; self.scheduleAutoScan() }
+            }
+            let read = (await self.bestRead(input))?.readAs.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.overlay.hideScan()
+            guard !Task.isCancelled, !self.isDismissing, self.store.pageID == page else { return }
+            self.consumedStrokeCount = firedCount
+            if self.tutorWriteZone?.session == session.id, !read.isEmpty { self.closeTutorWriteZone() }
+            self.restartTutor(session, read: read, problem: region, page: page)
+        }
     }
 
     private func closeTutorWriteZone() {
@@ -833,6 +932,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             onStatus?("That tutor conversation was removed.")
             return
         }
+        guard !current.isUnread else { return }   // nothing was read yet: rewriting or typing it starts the session
         guard current.thread.count < TutorSession.maxThread else {
             onStatus?("This conversation is getting long — lasso the problem and tap Tutor to start fresh.")
             return
@@ -858,7 +958,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             var next = session
             next.rung = reply.rung
             next.thread.append(TutorTurn(role: .tutor, text: reply.reply))
-            putTutorNote(next, reply: reply, page: page)
+            putTutorNote(next, text: reply.reply, page: page)
             onStatus?("")
         } catch {
             guard !Task.isCancelled, !isDismissing else { return }
@@ -877,11 +977,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// updated in place (payload replaced + re-sized, one journal transaction = one undo step) for each
     /// message after. It stays where the student moved it unless the taller note would now cover ink or
     /// another object; it never covers either, and it is drawn above every other object.
-    private func putTutorNote(_ session: TutorSession, reply: TutorReply, page: UUID) {
+    private func putTutorNote(_ session: TutorSession, text: String, page: UUID) {
         let pageObjects = store.pageProjection(page)
         let existing = TutorLayout.sessions(on: pageObjects).first { $0.latest.provenance.tutor.id == session.id }?.latest
         let provenance = TutorCalloutProvenance(tutor: session, turn: (existing?.provenance.turn ?? 0) + 1)
-        let payload = ObjectPayload.callout(text: reply.reply, sourceObjectIDs: [], provenanceJSON: provenance.json)
+        let payload = ObjectPayload.callout(text: text, sourceObjectIDs: [], provenanceJSON: provenance.json)
         let width = TutorNoteStyle.current.width
         let size = CGSize(width: width, height: TutorNoteView.height(for: provenance, width: width))
         let ink = (page == store.pageID ? canvasView.drawing : loadedInk(page)).strokes.map(\.renderBounds)
@@ -891,7 +991,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let frame: CGRect
         if let existing, let obj = pageObjects.objects[existing.objectID] {
             let kept = CGRect(origin: existing.frame.origin, size: size)
-            frame = avoid.contains(where: { $0.insetBy(dx: -8, dy: -8).intersects(kept) }) ? placed : kept
+            // A problem rewritten somewhere else moves its note with it.
+            let problemMoved = existing.provenance.tutor.problem != session.problem
+            frame = problemMoved || avoid.contains(where: { $0.insetBy(dx: -8, dy: -8).intersects(kept) }) ? placed : kept
             var ops: [OpPayload] = [.promote(objectID: obj.objectID, old: obj.payload, new: payload)]
             let moved = Transform(x: Double(frame.minX), y: Double(frame.minY), width: Double(frame.width),
                                   height: Double(frame.height), rotation: obj.transform.rotation)
@@ -1116,16 +1218,20 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         )
         let firedCount = strokes.count
         let scanPage = store.pageID            // the page these strokes belong to
-        // Ink in the highlighted write-here space is that session's reply.
+        // Ink in the highlighted write-here space is that session's reply; otherwise new ink next to a
+        // session's problem (or its note) is. By a note that couldn't read its problem, it's the problem
+        // written again.
+        let target: TutorSession?
         if let zone = tutorWriteZone, zone.page == scanPage, zone.rect.intersects(batch.bounds) {
-            readTutorReply(input, sessionID: zone.session, firedCount: firedCount, page: scanPage)
-            return
+            target = tutorSessions.first { $0.latest.provenance.tutor.id == zone.session }?.latest.provenance.tutor
+        } else {
+            target = tutorSessions.first(where: {
+                TutorLayout.replyZone(problem: $0.latest.provenance.tutor.problem, callouts: $0.all.map(\.frame)).intersects(batch.bounds)
+            })?.latest.provenance.tutor
         }
-        // New ink next to a tutor session's problem (or its messages) is the student's reply.
-        if let session = tutorSessions.first(where: {
-            TutorLayout.replyZone(problem: $0.latest.provenance.tutor.problem, callouts: $0.all.map(\.frame)).intersects(batch.bounds)
-        }) {
-            readTutorReply(input, sessionID: session.latest.provenance.tutor.id, firedCount: firedCount, page: scanPage)
+        if let target {
+            if target.isUnread { rereadTutorProblem(target, newInk: batch.bounds, firedCount: firedCount, page: scanPage) }
+            else { readTutorReply(input, sessionID: target.id, firedCount: firedCount, page: scanPage) }
             return
         }
         guard autoCommandsEnabled else { consumedStrokeCount = strokes.count; return }

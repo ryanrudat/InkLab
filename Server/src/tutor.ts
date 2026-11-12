@@ -192,10 +192,22 @@ function emptySide(req: TutorRequest, line: number): 'after' | 'before' {
 
 const show = (steps: string[]) => steps.map((l) => neutralize(l)).join(', ')
 
+/// A correction that FINISHED a line rather than fixing one: the line it replaced was unfinished
+/// ("1+3=" → "1+3 = 4"). Nothing was wrong with it, so it is never "a fix".
+export function isFinish(c: TutorCorrection): boolean {
+  const first = c.from[0]?.trim() ?? ''
+  return first.endsWith('=') || (c.line === 1 && first.startsWith('='))
+}
+/// Every change the student made only finished a line: there was never a mistake to fix.
+export const onlyFinished = (req: TutorRequest) => req.corrections.length > 0 && req.corrections.every(isFinish)
+
 /// The student's verified corrections, in words. Page line numbers only for lines that are on the page.
 export function describeCorrections(req: TutorRequest): string {
   return req.corrections.map((c) => {
     const onPage = c.from.length > 0 && c.line <= req.lines.length && c.from[0] === req.lines[c.line - 1]
+    if (onPage && isFinish(c)) {
+      return `- The student finished line ${c.line} (on the page: ${neutralize(c.from[0])}) as ${show(c.to)}, in a reply. The checker verified it. Nothing was wrong with that line, it just wasn't finished, so this is not a fix or a correction.`
+    }
     if (onPage) {
       const dropped = c.from.length > 1 ? ` The page lines after it (${show(c.from.slice(1))}) were dropped from their working.` : ''
       return `- The student corrected line ${c.line} (on the page: ${neutralize(c.from[0])}) to ${show(c.to)}, in a reply. The checker verified it.${dropped}`
@@ -210,6 +222,7 @@ function checkerSummary(req: TutorRequest, targets: CompiledTarget[], studentWro
   const corrected = req.corrections.length > 0
   switch (v.kind) {
     case 'allValid':
+      if (onlyFinished(req)) return `After the student finished their working (above), the checker verified it step by step: every step follows from the one before. Nothing on the page was wrong; it was unfinished. If the work is not finished yet, the next step is theirs to find.`
       return corrected
         ? `After the corrections above, the checker verified the student's working step by step: every step now follows from the one before. Their ORIGINAL working on the page was not all correct, so never say it was. If the work is not finished, the next step is theirs to find.`
         : `The checker verified all ${req.lines.length} line(s): each one follows from the line above. There is no mistake in what the student has written so far. If the work is not finished, the next step is theirs to find.`
@@ -249,9 +262,10 @@ export function tutorSystemPrompt(req: TutorRequest, rung: number, strict: boole
     ...RUNG_GUIDE,
     'Give the hint for the current level only. The level changes only when the app tells you so.',
     '',
-    'When the student has corrected their work in a reply',
-    '- Acknowledge the fix briefly and specifically ("Nice fix to line 2."). Never say their original working was right or finished, and never apologize for an earlier hint: the checker supported it.',
-    '- Only the lines on the page have numbers. Call a step they wrote in a reply "your fix" or "the step you just wrote", never "line N", and never say it was already on the page.',
+    'When the student has corrected or finished their work in a reply',
+    '- Acknowledge it briefly and specifically. A corrected line is a fix ("Nice fix to line 2."). A line they finished was never wrong, so just say what they wrote checks out ("1 + 3 = 4 checks out.") and never call it a fix or a correction.',
+    '- After a fix, never say their original working was right or finished, and never apologize for an earlier hint: the checker supported it.',
+    '- Only the lines on the page have numbers. Call a step they wrote in a reply "the step you just wrote" (or "your fix", for a correction), never "line N", and never say it was already on the page.',
     '',
     'Style',
     '- One or two short sentences, about 30 words at most, in warm, plain language for a school student.',
@@ -350,6 +364,7 @@ const CANT_READ_OR_CHECK = [
   /\b(?:can'?t|cannot|can not|couldn'?t|could not|unable to|not able to)\s+(?:quite\s+)?(?:read|make out|understand|check|tell|verify|confirm)\b/,
   /\b(?:unreadable|illegible|won'?t guess)\b/,
 ]
+const CALLS_IT_A_FIX = [/\b(?:fix|fixes|fixed|fixing|correction|corrected)\b/]
 const says = (reply: string, patterns: RegExp[]) => patterns.some((p) => new RegExp(p.source, 'i').test(reply))
 
 function lineJudgement(line: number): RegExp[] {
@@ -362,7 +377,9 @@ export function contradictsChecker(reply: string, req: TutorRequest): boolean {
   if (claimsAny(reply, APOLOGY)) return true
   // Only page lines have numbers: a "line 4" on a three-line page is a reply-derived step mislabelled.
   for (const m of reply.matchAll(/\blines?\s+(\d+)\b/gi)) if (Number(m[1]) > req.lines.length) return true
-  if (req.corrections.length > 0 && claimsAny(reply, ORIGINAL_WAS_RIGHT)) return true
+  if (req.corrections.some((c) => !isFinish(c)) && claimsAny(reply, ORIGINAL_WAS_RIGHT)) return true
+  // Finishing a line isn't fixing it: "Nice fix" / "your fix" would say there was a mistake.
+  if (onlyFinished(req) && says(reply, CALLS_IT_A_FIX)) return true
   const state = checkerState(req)
   if (state === 'unfinished') return claimsAny(reply, CLAIMS_MISTAKE) || says(reply, CANT_READ_OR_CHECK)
   if (state === 'valid') return claimsAny(reply, CLAIMS_MISTAKE)

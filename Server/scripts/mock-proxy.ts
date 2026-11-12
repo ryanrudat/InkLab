@@ -7,12 +7,15 @@
 //   SIMCTL_CHILD_INKLAB_PROXY_URL=http://localhost:8799 xcrun simctl launch booted com.ryanrudat.InkLab
 //
 // MOCK_PROBLEM / MOCK_REPLY set what "handwriting recognition" returns for the selected problem (math
-// domain) and for a reply written next to it (text domain).
-import { createInkLabServer } from '../src/server.ts'
+// domain) and for a reply written next to it (text domain). A UI test can change the math reading while
+// the mock runs: POST /mock/read {"math": ""} (nothing readable) or {"math": "1+3="}; {} restores it.
+import { createServer } from 'node:http'
+import { createInkLabRequestListener } from '../src/server.ts'
 import type { AnthropicClient, AnthropicResponse } from '../src/types.ts'
 
 const PORT = Number(process.env.PORT ?? 8799)
 const PROBLEM = process.env.MOCK_PROBLEM ?? '2x + 3 = 7\n2x = 10\nx = 5'
+let mathReading: string | null = null   // set by POST /mock/read
 const REPLY = process.env.MOCK_REPLY ?? '2x = 4'
 
 const LADDER = [
@@ -28,7 +31,7 @@ const client: AnthropicClient = {
   async complete(opts) {
     const system = opts.system ?? ''
     if (system.startsWith('You translate')) {
-      const value = system.includes('LaTeX') ? PROBLEM : REPLY
+      const value = system.includes('LaTeX') ? (mathReading ?? PROBLEM) : REPLY
       console.log(`[recognize] → ${JSON.stringify(value)}`)
       return say(JSON.stringify({ formal: { kind: 'plainText', value }, confidence: 0.95, readAs: value }))
     }
@@ -39,7 +42,9 @@ const client: AnthropicClient = {
       const lastText = typeof last.content === 'string' ? last.content : ''
       const unfinished = typeof opts.messages[0].content === 'string' && opts.messages[0].content.includes('is not finished')
       let draft: string
-      if (lastText.includes('checker verified the math')) draft = 'Nice fix to line 2. What could you do to both sides next to get x on its own?'
+      const finished = typeof opts.messages[0].content === 'string' && opts.messages[0].content.includes('finished their working')
+      if (lastText.includes('checker verified the math') && finished) draft = 'That checks out. What would you like to try next?'
+      else if (lastText.includes('checker verified the math')) draft = 'Nice fix to line 2. What could you do to both sides next to get x on its own?'
       // "1+3=" (MOCK_PROBLEM='1+3='): the first draft gives the value away; the regeneration nudges.
       else if (unfinished && opts.messages.length === 1) draft = strict ? 'What do you get when you put those two numbers together?' : 'You get 4, so what will you write after the equals sign?'
       else if (!strict && opts.messages.length === 1) draft = 'Subtract 3 from both sides and you get x = 2, see?'   // leaks: the guard must reject it
@@ -51,4 +56,18 @@ const client: AnthropicClient = {
   },
 }
 
-createInkLabServer({ client, authSecret: '' }).listen(PORT, () => console.log(`InkLab MOCK proxy on :${PORT}`))
+const inkLab = createInkLabRequestListener({ client, authSecret: '' })
+createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/mock/read') {
+    let body = ''
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      const math = (() => { try { return JSON.parse(body || '{}').math } catch { return undefined } })()
+      mathReading = typeof math === 'string' ? math : null
+      console.log(`[mock] math reading → ${mathReading === null ? 'default' : JSON.stringify(mathReading)}`)
+      res.writeHead(204).end()
+    })
+    return
+  }
+  inkLab(req, res)
+}).listen(PORT, () => console.log(`InkLab MOCK proxy on :${PORT}`))

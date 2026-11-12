@@ -20,8 +20,8 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
 all have working, tested cores. **149 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **54 app unit tests + UI tests** (the iPad target), plus a **TypeScript
-backend proxy** (`Server/`, **95 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
+`InkLabKit` umbrella), plus **57 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+backend proxy** (`Server/`, **96 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
 (hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
 
@@ -79,7 +79,9 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   page** highlights a space under the problem and reads what you write there after a pause (any step you
   write is checked by the red pen, and a verified fix is passed to the tutor as a correction), and
   **Type** opens a text field. An unfinished line ("1+3=") gets a nudge to finish it, never "can't
-  read". The tutor lives in one **margin note** beside
+  read". The note shows what it read ("I read: 7+3=", tap to correct it and start over), and a problem
+  it can't read at all gets a note offering **Rewrite it** or **Type it**. The tutor lives in one
+  **margin note** beside
   the line it's about, with earlier messages folded away; undo rewinds the conversation a message at a
   time. ⚠️ Needs the moderation safeguard before minors use it.
 - **Generative make-real** — `@<anything>` generates a live widget via Claude (`claude-opus-4-8`,

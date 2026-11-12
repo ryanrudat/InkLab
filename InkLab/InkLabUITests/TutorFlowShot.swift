@@ -41,6 +41,17 @@ final class TutorFlowShot: XCTestCase {
         return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: p, object: element)], timeout: timeout) == .completed
     }
 
+    /// What the mock's handwriting reading returns for a problem (POST /mock/read); nil = its default.
+    private func setMockReading(_ math: String?) {
+        guard isMock else { return }
+        var req = URLRequest(url: URL(string: "\(proxy)/mock/read")!)
+        req.httpMethod = "POST"
+        req.httpBody = try? JSONSerialization.data(withJSONObject: math.map { ["math": $0] } ?? [String: String]())
+        let done = expectation(description: "mock reading")
+        URLSession.shared.dataTask(with: req) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 5)
+    }
+
     /// Launch against the proxy with the AI permission on, in a fresh notebook (no existing one is touched).
     @MainActor
     private func launchIntoNewNotebook() throws -> XCUIApplication {
@@ -52,6 +63,7 @@ final class TutorFlowShot: XCTestCase {
         }.resume()
         wait(for: [up], timeout: 5)
         try XCTSkipUnless(reachable, "Start the mock proxy first: cd Server && npm run mock")
+        setMockReading(nil)
 
         let app = XCUIApplication()
         app.launchEnvironment["INKLAB_TEST_STORE"] = "1"   // a throwaway library, never the real notebooks
@@ -159,6 +171,8 @@ final class TutorFlowShot: XCTestCase {
         if !fixRow.waitForExistence(timeout: 5) { debugDump(app, "thread-rows") }
         XCTAssertTrue(fixRow.exists && fixRow.label.contains("checks out"), "the engine's check isn't in the thread")
         XCTAssertFalse(zone.exists, "the write-here space should close once the reply is read")
+        // The working checks out now, so the header stops counting hints.
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Tutor · your working checks out")
         shot("2-written-fix-thread-expanded")
         earlier.tap()   // fold it again
         XCTAssertTrue(waitLabel(earlier, timeout: 5) { $0.contains("2 earlier") })
@@ -168,7 +182,8 @@ final class TutorFlowShot: XCTestCase {
         if !app.alerts.firstMatch.waitForExistence(timeout: 5) { debugDump(app, "after-reply-tap") }
         XCTAssertTrue(app.alerts.buttons["Another hint"].waitForExistence(timeout: 5))
         app.alerts.buttons["Another hint"].tap()
-        XCTAssertTrue(waitLabel(app.staticTexts["tutorHeader"]) { $0.contains("hint 2 of 4") })
+        XCTAssertTrue(waitLabel(app.buttons["tutorEarlier"]) { $0.contains("4 earlier") })
+        XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("checks out"))
         let second = message.label
         shot("3-another-hint")
 
@@ -179,7 +194,7 @@ final class TutorFlowShot: XCTestCase {
         field.typeText("so is x = 2?")
         app.alerts.buttons["Send"].tap()
         XCTAssertTrue(waitLabel(app.buttons["tutorEarlier"]) { $0.contains("6 earlier") })
-        XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("hint 2 of 4"))
+        XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("checks out"))
         shot("4-typed-question")
 
         // Undo rewinds the conversation by one tutor message (same note).
@@ -193,5 +208,91 @@ final class TutorFlowShot: XCTestCase {
         app.buttons["undo"].tap()
         XCTAssertTrue(note.waitForExistence(timeout: 5))
         shot("6-closed-then-undone")
+    }
+
+    /// A hooked "1" read as a 7: the note says what it read, and the student can correct it. The session
+    /// starts over from the corrected problem (fresh hint 1, no "nice fix"), and undo goes back.
+    @MainActor
+    func testFixWhatWasRead() throws {
+        let app = try launchIntoNewNotebook()
+        try XCTSkipUnless(isMock, "needs the mock's scripted reading")
+        setMockReading("7+3=")
+        defer { setMockReading(nil) }
+        stroke(app, from: CGPoint(x: 60, y: 300), to: CGPoint(x: 200, y: 306))
+        app.buttons["tutor"].tap()
+        let readAs = app.buttons["tutorReadAs"]
+        XCTAssertTrue(readAs.waitForExistence(timeout: 30), "the note doesn't say what it read")
+        XCTAssertEqual(readAs.label, "I read: 7+3=")
+        let message = app.staticTexts["tutorMessage"]
+        let misread = message.label
+        shot("read-1-misread")
+
+        readAs.tap()
+        let field = app.alerts.textFields["tutorReadingField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "7+3=", "the correction should start from what was read")
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "1+3=")
+        app.alerts.buttons["Start"].tap()
+        XCTAssertTrue(waitLabel(readAs) { $0 == "I read: 1+3=" }, "the session didn't restart from the corrected reading")
+        XCTAssertTrue(waitLabel(message) { $0 != misread && !$0.lowercased().contains("fix") })
+        XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("hint 1 of 4"))
+        XCTAssertFalse(app.buttons["tutorEarlier"].exists, "a corrected reading starts a fresh conversation")
+        XCTAssertEqual(app.otherElements.matching(identifier: "tutorNote").count, 1, "the same note, not a second one")
+        shot("read-2-corrected")
+
+        app.buttons["undo"].tap()
+        XCTAssertTrue(waitLabel(readAs, timeout: 5) { $0 == "I read: 7+3=" }, "undo should go back to the old reading")
+    }
+
+    /// Nothing readable: a note at the problem that stays (not a toast), offering to rewrite or type it.
+    /// Rewriting it in the highlighted space reads it again and starts the session in the same note.
+    @MainActor
+    func testUnreadableProblemGetsANote() throws {
+        let app = try launchIntoNewNotebook()
+        try XCTSkipUnless(isMock, "needs the mock's scripted reading")
+        setMockReading("")
+        defer { setMockReading(nil) }
+        // A scrawl: a tight zigzag nothing can read.
+        for i in 0..<4 {
+            let x = 70.0 + Double(i) * 14
+            stroke(app, from: CGPoint(x: x, y: 300), to: CGPoint(x: x + 10, y: 330))
+        }
+        app.buttons["tutor"].tap()
+        let message = app.staticTexts["tutorMessage"]
+        XCTAssertTrue(message.waitForExistence(timeout: 30), "no note for an unreadable problem")
+        if !message.label.contains("couldn't read") { debugDump(app, "unread-note") }
+        XCTAssertTrue(message.label.contains("couldn't read"), message.label)
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Tutor")
+        XCTAssertFalse(app.buttons["tutorReadAs"].exists)
+        XCTAssertEqual(app.buttons["tutorReplyWrite"].label, "Rewrite it")
+        XCTAssertEqual(app.buttons["tutorReplyType"].label, "Type it")
+        let note = app.otherElements["tutorNote"]
+        XCTAssertFalse(note.waitForNonExistence(timeout: 4), "the note must stay until they act")
+        shot("unread-1-note")
+
+        // Type it: the same alert as fixing a reading, empty this time.
+        app.buttons["tutorReplyType"].tap()
+        let field = app.alerts.textFields["tutorReadingField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String ?? "", field.placeholderValue ?? "", "nothing was read, so nothing to prefill")
+        app.alerts.buttons["Cancel"].tap()
+
+        // Rewrite it: written again in the highlighted space, it's read and the session starts.
+        setMockReading("1+3=")
+        app.buttons["tutorReplyWrite"].tap()
+        let zone = app.otherElements["tutorWriteZone"]
+        XCTAssertTrue(zone.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["tutorWriteHint"].label.contains("Write the problem again"))
+        let z = zone.frame
+        stroke(app, from: CGPoint(x: z.minX + 30, y: z.midY + 10), to: CGPoint(x: z.minX + 150, y: z.midY + 16))
+        let readAs = app.buttons["tutorReadAs"]
+        XCTAssertTrue(readAs.waitForExistence(timeout: 30), "rewriting it didn't start the session")
+        XCTAssertEqual(readAs.label, "I read: 1+3=")
+        XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("hint 1 of 4"))
+        XCTAssertEqual(app.otherElements.matching(identifier: "tutorNote").count, 1, "the same note, not a second one")
+        XCTAssertFalse(zone.exists)
+        XCTAssertGreaterThan(note.frame.maxY, z.minY, "the note should move beside the rewritten problem")
+        shot("unread-2-rewritten")
     }
 }

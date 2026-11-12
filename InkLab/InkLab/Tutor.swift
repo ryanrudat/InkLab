@@ -135,6 +135,32 @@ struct TutorSession: Codable, Sendable, Equatable {
                                      anchorLine: anchor, lines: lines))
     }
 
+    /// Nothing could be read from the page: the note says so and offers to rewrite or type the problem.
+    /// No verdict and nothing for the proxy; the next reading (or typed problem) starts the session.
+    var isUnread: Bool { pageLines.isEmpty }
+    static let unreadMessage = "I couldn't read your working. Can you write it again a little larger, or type it?"
+
+    static func unread(problem: CGRect) -> TutorSession {
+        var s = TutorSession(problem: problem, pageLines: [], lineRects: [], anchorLine: 0, lines: [])
+        s.thread = [TutorTurn(role: .tutor, text: unreadMessage)]
+        return s
+    }
+
+    /// The conversation started over on a new reading of the problem: the student corrected what was read,
+    /// or rewrote or typed a problem that couldn't be read. A fresh verdict, no corrections (they didn't
+    /// fix their work, only the reading), an empty thread and hint 1. The id stays, so the same note is
+    /// updated, and one undo goes back to the old reading.
+    func restarted(read: String, problem newProblem: CGRect? = nil, strokes: [CGRect]) -> Result<TutorSession, TutorStartError> {
+        TutorSession.start(read: read, problem: newProblem ?? problem, strokes: strokes).map { fresh in
+            var s = fresh
+            s.id = id
+            return s
+        }
+    }
+
+    /// What the note shows as read ("I read: 2x + 3 = 7 · 2x = 10"), so a misreading can be caught.
+    var readAs: String { pageLines.joined(separator: "  ·  ") }
+
     /// The page line the note points at, in content coordinates.
     var anchorRect: CGRect {
         lineRects.indices.contains(anchorLine - 1) ? lineRects[anchorLine - 1] : problem

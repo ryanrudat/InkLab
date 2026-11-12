@@ -11,6 +11,7 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
 - **The deterministic "brain" plus the live make-real loop are now real in the app; remaining work is mostly compliance, persistence, on-device validation, and §6 interpreter UI.**
 - **Socratic tutor (2026-11-12):** **13 app unit tests** (`TutorTests`) + the `TutorFlowShot` UI run, **InkLabMath 32** (8 new), **43 proxy tests** for `/tutor` + the leak guard. Full suites green: app 48, packages 145, proxy 85. See below.
   Updated the same day (unfinished lines, Write/Type replies, the dock button): **app 54, packages 149 (InkLabMath 36), proxy 95**.
+  Then (what was read, unreadable problems, finished-not-fixed): **app 57, packages 149, proxy 96**, TutorFlowShot 4/4.
 
 ### 🎓 Socratic tutor (2026-11-12)
 A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to
@@ -51,6 +52,23 @@ a model.
   line and is checked as such ("4" → "1+3 = 4" ✓, "5" ✗). For that, a variable-free line 1 ("1 + 3 = 5")
   is now checked as true or false; before, a one-line equation always passed. Check work shows
   "Line N isn't finished yet" too.
+- **Finished is not fixed (fix from a live run):** a reply that finishes an unfinished line ("1+3=" then
+  "4") is described to the model as finishing it, not correcting it ("Nothing was wrong with that line"),
+  and the prompt says to acknowledge it as "1 + 3 = 4 checks out". With only finished lines, a draft that
+  says "fix" or "correction" is rejected. Once the working checks out, the note's header says "Tutor ·
+  your working checks out" instead of counting hints.
+- **What was read (fix from a live run):** a hooked "1" read as "7+3=" got coached as 7 + 3, with no way
+  to tell. The note now starts with a quiet **"I read: 7+3= ✎"** line (all lines, "·" between them, at
+  most two lines then "…"). Tapping it opens the typed-reply style alert prefilled with the reading; the
+  corrected problem **starts the session over** in the same note (`TutorSession.restarted`: same id, fresh
+  verdict, no corrections, empty thread, hint 1), and one undo goes back to the old reading.
+- **Unreadable problems (fix from a live run):** nothing read used to be a 2.8 s toast. Now the margin
+  note goes up at the problem saying it couldn't read it, and stays until the student acts or closes it:
+  **Rewrite it** highlights a space (ink written there, or by the problem, is read again after a pause;
+  written over the old ink, the two are read together) and **Type it** opens the same alert, empty. The
+  first reading that works starts the session in that same note, which moves beside the rewritten
+  problem. Tapping Tutor again on the same problem reuses the note too. Nothing is sent to `/tutor` while
+  nothing has been read.
 - **Replies:** the note offers both. **Write on the page** highlights a free space under the problem
   (switching to the pen if needed); after a pause the auto-scan reads the ink written there as the reply
   and the highlight goes away (✕ on it cancels). Writing anywhere else near the problem still counts too,
