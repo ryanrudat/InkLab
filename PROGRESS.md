@@ -9,6 +9,81 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
 - iPad app **builds and runs on an iPadOS 18 Simulator** to a **Home/Library → Canvas**, and the **full on-device → make-real → cloud loop works end-to-end** (verified live against the real Anthropic API).
 - All §12 foundational decisions resolved across ADRs 0001–0005. Git baseline committed.
 - **The deterministic "brain" plus the live make-real loop are now real in the app; remaining work is mostly compliance, persistence, on-device validation, and §6 interpreter UI.**
+- **Socratic tutor (2026-11-12):** **13 app unit tests** (`TutorTests`) + the `TutorFlowShot` UI run, **InkLabMath 32** (8 new), **43 proxy tests** for `/tutor` + the leak guard. Full suites green: app 47, packages 145, proxy 85. See below.
+
+### 🎓 Socratic tutor (2026-11-12)
+A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to
+it, never the answer or the corrected step. It builds on the red pen; nothing about correctness moved to
+a model.
+- **Entry points:** **Tutor** in the lasso selection menu (next to Recognize / Check work / Fit graph) and
+  in the `＋` menu (no lasso = the whole page's ink).
+- **READ → COMPUTE → TALK.** The selection is read with the same `bestRead` path as Check work. The
+  **verdict is `checkChain`** (first wrong line, reason, counterexample), and the new `problemFacts`
+  (InkLabMath `TutorGuard.swift`) derives what must never be handed over: the problem's value, its
+  solution set, the exact derivative, or the integrand (all its antiderivatives). The new proxy endpoint
+  **`POST /tutor`** (`Server/src/tutor.ts`) only talks: consent gate first (`cloudEligible`), stateless
+  (the app sends the thread every turn), `claude-opus-5-5` at **effort `low`** for chat latency (thinking
+  stays adaptive; Opus 5.5 can't disable it), server-side refusal fallback on, override with `TUTOR_MODEL`.
+- **Hint ladder, decided by the server, not the model:** nudge → question about the specific line →
+  name the concept → worked example of a *different* problem. It climbs one rung only when the student
+  asks again ("another hint", "I'm stuck", or the **Another hint** button) and drops back to 1 when the
+  engine verifies a new step of theirs.
+- **Answer-leak guard (two layers, fail closed).** The proxy (`Server/src/mathGuard.ts`) pulls every piece
+  of math out of a draft (Unicode, light LaTeX, "x is 4", "x = ±2") and tests it against the engine's
+  protected results by **numeric identity testing** — equivalent expressions, rearranged equations (L−R
+  proportional), stated solutions, antiderivatives (symbolic d/dx). Quoting the student's own lines is
+  allowed. A leak (or a draft that contradicts the checker) is rejected and regenerated once with a
+  stricter instruction; if that fails too, a **math-free generic hint** is sent. The app then re-checks
+  the reply with the **exact** engine (`tutorReplyLeak`: canonical forms, proportional numerators) and
+  re-asks strictly / falls back the same way. A lost-solution counterexample ("x = −2 is a solution…") is
+  kept out of the prompt.
+- **Unsupported:** when the engine can't check a line, the reply starts with a fixed sentence ("I can't
+  check line N … so I won't guess whether it's right"), and the model is told not to judge it.
+- **Replies:** write next to the problem — after a pause the auto-scan reads new ink in the session's zone
+  (consent-gated, works even with auto-"@" off) — or tap **Reply** on a tutor callout to type one. Any math
+  in a reply is **checked by the red pen** in context ("You: 2x = 4 ✓ checks out"); a verified step
+  replaces the wrong line. Prose is just a message.
+- **On the page (layout A, the margin note):** one note per session in the right margin, level with the
+  line the verdict is about, with a thin connector to that line, placed right of all ink in its band so it
+  **never covers the student's writing** (below the ink if the margin is full). Only the latest tutor
+  message shows; earlier hints, the student's replies and the engine's check of each step ("You: 2x = 4
+  ✓ checks out") fold into an **"N earlier"** control. One ✕ closes the session; Reply stays on the note.
+  The note is ONE journal object: each message replaces its payload (`promote` + resize, one undo step),
+  so **undo rewinds the conversation a message at a time**, ✕ is undoable, and it survives relaunch. All
+  of its colours, fonts and shapes live in `TutorNoteStyle` (`TutorNoteView.swift`), neutral until the
+  app theme lands.
+- **Corrections are told to the tutor (fix from a live run).** The page lines stay fixed (`lines`), the
+  engine's working is sent separately (`working`), and every verified fold-in is sent as a correction
+  ("the student corrected line 2 (on the page: 2x = 10) to 2x = 4; the lines after it were dropped").
+  The prompt tells the model to acknowledge the fix, never call the original working right, never
+  apologize for an earlier hint, and never number a reply-derived step as "line N"; the proxy rejects
+  drafts that do (incl. "all along", "already on your line", apologies, line numbers past the page).
+- **Questions aren't working (fix from a live run).** "so is x = 2?" (ends in "?" or opens like a
+  question) is checked by the engine and passed as `check` with `question: true`, but never folded into
+  the working, and it doesn't reset the ladder.
+- **Shorter replies.** One or two sentences, ~30 words, exactly one question, no filler: the proxy
+  rejects drafts over 280 chars or without exactly one "?", and drops a generic-praise first sentence
+  ("Good start writing each step out.") while keeping a specific one ("Nice fix to line 2.").
+- **Verified:** server tests for the endpoint and the guard (incl. a leaking reply being rejected,
+  regenerated, and a double leak falling back; the three live failures; questions; format), InkLabMath
+  guard tests, app unit tests (session, corrections, questions, line finding, margin placement that never
+  covers ink, the note's fold, app-side guard with a fake provider, journal/undo), and a **Simulator UI
+  run** (`TutorFlowShot`) against `npm run mock` — one note beside line 2, the leaked first draft never
+  reached the page, the written fix was read, verified and shown in the thread, the ladder climbed only
+  when asked, a typed question didn't reset it, undo rewound one message, ✕ closed the session and undo
+  brought it back.
+- **Live check (Opus 5.5, reading stubbed, local proxy):** replaying the failing session — opening, the
+  written fix, "so is x = 2?", Another hint — every reply was clean on the first draft, one question,
+  121–154 chars, 1.6–5.4 s; the fix was acknowledged as "the step you just wrote", the question was
+  confirmed as the student's idea without claiming it was on the page, and `TutorFlowShot` passed
+  against it. (The opening-praise trim was added after that run; it is covered by tests.) `fallbacks` was
+  accepted on API version `2023-06-01`.
+- ⚠️ **Not verified on a device / with a Pencil**, and nothing is deployed to Railway. **Minors must not use the tutor until input/output moderation exists**
+  (see `docs/compliance-checklist.md`).
+- **Known limits:** the guard catches math, not answers spelled out in words ("two"); bare numbers are not
+  treated as solutions of an equation (too many false alarms, e.g. "divide by 2"); an expression chain's
+  answer is protected by *form*, so a rewrite like (x+1)(x+1) of (x+1)^2 also counts as a leak (fails
+  closed). v1 covers the red pen's algebra + calculus only.
 
 ### 🎨 Make-real generation fixes (2026-11-12)
 A review of how `@` requests become widgets found the card-design problems came from the pipeline, not
@@ -324,6 +399,8 @@ _(mirrors the changelog's "WHAT STILL NEEDS DOING")_
 ### Compliance / consent (required before any cloud use by minors)
 - [~] Real **consent/compliance surface**: the app now has a **Settings → "Cloud AI" opt-in** (consent toggle + account-type picker) wired into a real `MakeRealSession` (gated client-side **and** re-checked server-side); default is **off**. **Closed (2026-06-07) a real compliance hole:** `ClaudeVisionRecognizer` used to send a HARDCODED "consented adult" session, bypassing both gates — it now sends the real session, and **every** cloud path (`/make-real`, `/recognize`) is consent-gated client-side (`blockReason`) + server-side (`cloudEligible`); verified live (401 no-auth, 403 non-consented/minor). **Still TODO:** a proper **age/onboarding screen** for `userKind`, the App-Store **§5.1.2(i)** first-run prompt, `NWPathMonitor` reachability, and **persisting** the choice (settings are in-memory, reset each launch).
 - [ ] Verifiable parental consent flow; FERPA school-official DPA; privacy policy + App Privacy labels; `PrivacyInfo.xcprivacy` (app + MyScript); account deletion. (Counsel gates — see [docs/compliance-checklist.md](docs/compliance-checklist.md).)
+- [ ] 🔴 **Input/output moderation on `/tutor` before any minor uses the tutor** (it is a chat with the student). Also: say in the Settings AI-permission copy that the tutor sends the student's working and replies.
+- [ ] **Tutor, live pass:** run it against the real API (prompt adherence at effort `low`, latency, that `fallbacks` is accepted on API version `2023-06-01`) and on a device with a Pencil (reading replies written next to the problem); redeploy the proxy.
 
 ### Persistence & sync (ADR 0004)
 - [x] **File-backed persistence (2026-06-07)** — op log (append-only JSONL) + per-page ink blobs behind a swappable `JournalStorage` protocol (`JournalStorage.swift`), scoped per notebook under Application Support. The **notebook list also persists** (`library.json`) so `Notebook.id` is stable across launches (the chain only works because of this). On launch the op log replays via `fold` with the HLC `Clock` reseeded past it; objects, generated widgets, **and ink** survive relaunch. Hardened (file protection for locked-device writes, background-flush, fsync, error logging) + **adversarially reviewed** (multi-agent: core confirmed correct; the only real must-fix — a background flush — is in). Verified: `journalPersistsAndReloads` + `persistedUndoSurvivesReloadHistoryResets`. **Still TODO:** GRDB/SQLite impl (drop in behind the protocol), log **compaction** for very large notebooks, CloudKit sync.

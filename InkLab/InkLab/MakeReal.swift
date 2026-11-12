@@ -59,6 +59,11 @@ enum InkLabProxy {
     /// server) — `localhost` only works in the Simulator, which shares the Mac's network. Set the
     /// `MakeRealBaseURL` Info.plist key to the deployed URL; falls back to the local dev server.
     static var baseURL: URL {
+        #if DEBUG
+        // Test hook: point a Debug build at a local mock proxy without touching the plist, e.g.
+        // `SIMCTL_CHILD_INKLAB_PROXY_URL=http://localhost:8799 xcrun simctl launch …`.
+        if let s = ProcessInfo.processInfo.environment["INKLAB_PROXY_URL"], !s.isEmpty, let u = URL(string: s) { return u }
+        #endif
         if let s = Bundle.main.object(forInfoDictionaryKey: "MakeRealBaseURL") as? String,
            !s.isEmpty, let u = URL(string: s) { return u }
         return URL(string: "http://localhost:8787")!

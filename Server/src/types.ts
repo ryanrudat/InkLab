@@ -47,6 +47,11 @@ export interface CompleteOpts {
   model?: string
   thinking?: { type: 'adaptive' | 'disabled' }
   effort?: 'low' | 'medium' | 'high' | 'max'
+  /** Beta feature names sent as the `anthropic-beta` header (e.g. server-side refusal fallback). */
+  betas?: string[]
+  /** Server-side refusal fallback (`server-side-fallback-2026-07-01`): re-run a declined request on
+   *  Anthropic's recommended model for that refusal category instead of returning the refusal. */
+  fallbacks?: 'default'
   /** Per-call deadline in ms; overrides the client's default request timeout. */
   timeoutMs?: number
   /** Cancels an in-flight upstream request, for example when the downstream client disconnects. */

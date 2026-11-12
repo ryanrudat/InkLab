@@ -4,13 +4,14 @@ import { pathToFileURL } from 'node:url'
 import { httpAnthropicClient } from './anthropic.ts'
 import { handleRecognize } from './recognize.ts'
 import { handleMakeReal, DEFAULT_MAKE_REAL_DEADLINE_MS } from './makeReal.ts'
+import { handleTutor } from './tutor.ts'
 import { timingSafeEqual } from 'node:crypto'
 import type { AnthropicClient } from './types.ts'
 
 const PORT = Number(process.env.PORT ?? 8787)
 
 // Shared-secret gate for the Claude-calling endpoints. When INKLAB_PROXY_SECRET is set (Railway/prod),
-// /make-real and /recognize require `Authorization: Bearer <secret>`. When unset (local dev / tests),
+// /make-real, /recognize and /tutor require `Authorization: Bearer <secret>`. When unset (local dev / tests),
 // they stay open. NOTE: a secret embedded in a distributed app is obfuscation, not strong auth — it
 // stops opportunistic abuse of the public URL, not a determined attacker. See README "Auth".
 function authorized(req: IncomingMessage, authSecret: string): boolean {
@@ -68,6 +69,8 @@ export interface InkLabServerOptions {
   authSecret?: string
   /** Whole-request budget for /make-real (default MAKE_REAL_DEADLINE_MS env, else 170 s). */
   makeRealDeadlineMs?: number
+  /** Whole-request budget for /tutor (both drafts; default 45 s). */
+  tutorDeadlineMs?: number
 }
 
 function configuredMakeRealDeadlineMs(): number {
@@ -97,7 +100,7 @@ export function createInkLabRequestListener(options: InkLabServerOptions = {}) {
       res.end(JSON.stringify(body))
     }
     try {
-      if ((req.url === '/make-real' || req.url === '/recognize') && req.method === 'POST' && !authorized(req, authSecret)) {
+      if ((req.url === '/make-real' || req.url === '/recognize' || req.url === '/tutor') && req.method === 'POST' && !authorized(req, authSecret)) {
         return json(401, { error: 'unauthorized' })
       }
       if (req.method === 'POST' && req.url === '/recognize') {
@@ -112,6 +115,15 @@ export function createInkLabRequestListener(options: InkLabServerOptions = {}) {
         const out = await handleMakeReal(client, parsed.body, {
           signal: requestController.signal,
           deadlineMs: makeRealDeadlineMs,
+        })
+        return json(out.status, out.body)
+      }
+      if (req.method === 'POST' && req.url === '/tutor') {
+        const parsed = await parseJsonBody(req)
+        if (!parsed.ok) return json(parsed.status, { error: parsed.error })
+        const out = await handleTutor(client, parsed.body, {
+          signal: requestController.signal,
+          deadlineMs: options.tutorDeadlineMs,
         })
         return json(out.status, out.body)
       }
@@ -146,7 +158,7 @@ const isEntrypoint = process.argv[1] !== undefined
 
 if (isEntrypoint) {
   const authSecret = process.env.INKLAB_PROXY_SECRET ?? ''
-  if (!authSecret) console.warn('⚠️  INKLAB_PROXY_SECRET not set — /make-real and /recognize are OPEN (no auth).')
+  if (!authSecret) console.warn('⚠️  INKLAB_PROXY_SECRET not set — /make-real, /recognize and /tutor are OPEN (no auth).')
   const server = createInkLabServer({ authSecret })
   server.listen(PORT, () => console.log(`InkLab proxy listening on :${PORT}`))
 }

@@ -31,6 +31,9 @@ Items marked 🔴 require legal counsel.
       language for the school SKU.
 - [ ] Implement the **5 "Organizations Serving Minors" safeguards**: age verification, input/output
       moderation, monitoring/reporting, safety resources, AI disclosure.
+      🔴 **Gate for the Socratic tutor (`POST /tutor`, 2026-11-12):** it is an open-ended chat with the
+      student, so **input/output moderation must be done before any minor uses it** — not only before
+      ship. The tutor's answer-leak guard and "stay on the math problem" prompt are **not** moderation.
 - [ ] Design for **30-day retention** as the fallback (don't assume ZDR is granted).
 
 ## Architecture
@@ -184,3 +187,23 @@ sections are unchanged. One client-side gap from 2026-06-08 has been partially c
 > The repo is now a **public GitHub repo** (`https://github.com/ryanrudat/InkLab`). The Anthropic key
 > stays off-device in the proxy and `Server/.env` is gitignored; confirm no secrets are committed before
 > each push (the key, signed DPAs, and any consent records must never enter the public history).
+
+## Status (2026-11-12) — the Socratic tutor adds a chat with the student
+
+The new tutor (`Server/src/tutor.ts`, app `Tutor.swift`) is the first feature where a student **converses**
+with Claude, so the minors' safeguards bite harder here than for `@` widgets or recognition:
+
+- **🔴 Moderation must ship first.** A minor must not use the tutor until **input/output moderation** (the
+  "Organizations Serving Minors" safeguard) is in place on the proxy, plus monitoring/reporting and safety
+  resources for anything a student writes that isn't about the math. Until then the tutor is for
+  adult testing only. What exists today is *not* moderation: the system prompt keeps the model on the
+  problem and tells it to ignore instructions inside the student's text, and a deterministic guard stops
+  it from giving away answers.
+- **What is sent:** the transcribed working, the red pen's verdict, the thread so far (the student's
+  replies, typed or read from handwriting near the problem) — text only, no ink image after the initial
+  read. The proxy stores nothing (stateless); the thread lives in the notebook's journal on the device.
+- **Gate:** the same `cloudEligible` whitelist runs first on every `/tutor` call (403 before any model
+  call), and the app's `tutorBlockReason` refuses up front. Ink written next to an active tutor session is
+  read through the consent-gated recognizer only while that session's messages are on the page.
+- **Disclosure:** the AI-permission copy in Settings still talks about "@" prompts only. It must also say
+  that the tutor sends the student's working and replies to Anthropic before this ships.

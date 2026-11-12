@@ -51,9 +51,11 @@ struct HomeView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { _ = library.addNotebook(paper: settings.defaultPaper) } label: { Image(systemName: "plus") }
+                        .accessibilityIdentifier("newNotebook")
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                        .accessibilityIdentifier("settings")
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(settings) }

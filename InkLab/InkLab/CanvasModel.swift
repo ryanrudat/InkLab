@@ -103,6 +103,8 @@ struct RecognitionDraft: Identifiable, Sendable {
     var onRecognize: (() -> Void)?
     /// Explicit, on-demand "check my working" — runs the on-device deterministic red-pen tutor (no cloud).
     var onCheckWork: (() -> Void)?
+    /// Socratic tutor on the lassoed problem + working: hints and questions, never the answer (Tutor.swift).
+    var onTutor: (() -> Void)?
     /// Fit the lassoed sketch (or page) to a best-fit curve → a live, correct graph (InkLabFit, on-device).
     var onFitCurve: (() -> Void)?
     /// Drop a native live widget (e.g. "scientificCalculator") onto the page.

@@ -19,6 +19,8 @@ final class ObjectOverlayView: UIView {
     var onAnnotationChanged: ((UUID, Data?) -> Void)?
     /// Supplies a widget's saved annotation strokes when its host is (re)created.
     var annotationProvider: ((UUID) -> Data?)?
+    /// The user tapped Reply on a tutor callout — the canvas asks for a typed reply.
+    var onTutorReply: ((UUID) -> Void)?
 
     private var hosts: [UUID: ObjectHostView] = [:]
     private var scanView: UIView?
@@ -160,6 +162,7 @@ final class ObjectOverlayView: UIView {
                 host.onRecognizeAnnotation = { [weak self] id, img in self?.onRecognizeAnnotation?(id, img) }
                 host.onAnnotationChanged = { [weak self] id, data in self?.onAnnotationChanged?(id, data) }
                 host.onWebWidgetInteraction = { [weak self] id in self?.prioritizeWebWidget(id) }
+                host.onTutorReply = { [weak self] id in self?.onTutorReply?(id) }
                 addSubview(host)
                 hosts[snapshot.objectID] = host
                 host.setPencilErasesAnnotation(pencilErasesAnnotations)        // honor the live Eraser-tool state
@@ -295,6 +298,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     var onRecognizeAnnotation: ((UUID, UIImage) -> Void)?   // ƒ: recognize my writing → drive the widget
     var onAnnotationChanged: ((UUID, Data?) -> Void)?       // persist the per-widget annotation strokes
     var onWebWidgetInteraction: ((UUID) -> Void)?           // promote/touch the generated-widget LRU
+    var onTutorReply: ((UUID) -> Void)?                     // Reply on a tutor callout → typed reply
 
     private static let minWidth: CGFloat = 120
     private static let minHeight: CGFloat = 90
@@ -324,6 +328,10 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     private let headerPan = UIPanGestureRecognizer()
 
     private let deleteButton = UIButton(type: .system)
+    /// The tutor's margin note (tutor sessions only): its height follows its content, it has no resize
+    /// grip, and the ✕ closes the whole session.
+    private var tutorNote: TutorNoteView?
+    private var tutorAnchor: CGRect?                    // the anchored page line, content coordinates
     private let resizeHandle = UIView()
     private let resizeGrip = UIImageView(image: UIImage(systemName: "arrow.up.left.and.arrow.down.right",
                                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold)))
@@ -486,7 +494,9 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     /// let a ✕ tap through even while the lasso tool is active (otherwise you can't remove a result/object
     /// you just made by lassoing).
     func chromeHit(_ point: CGPoint) -> UIView? {
-        deleteButton.frame.contains(point) ? deleteButton : nil
+        if deleteButton.frame.contains(point) { return deleteButton }
+        if let tutorNote, let hit = tutorNote.controlHit(convert(point, to: tutorNote)) { return hit }
+        return nil
     }
 
     /// Preload a widget's saved annotation strokes (applied once the annotation view exists).
@@ -504,6 +514,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
         center = CGPoint(x: snapshot.transform.x + snapshot.transform.width / 2,
                          y: snapshot.transform.y + snapshot.transform.height / 2)
         transform = CGAffineTransform(rotationAngle: CGFloat(snapshot.transform.rotation))
+        fitTutorNote()
         setNeedsLayout()
     }
 
@@ -515,6 +526,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             renderedKind = kind
         }
         update(for: snapshot.payload)
+        fitTutorNote()
     }
 
     /// The content "kind" a payload maps to. A change here means rebuild the renderer (promote/insert).
@@ -523,10 +535,32 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             if policy.hasPrefix("native:") { return policy }       // Tier-A native widget
             if policy == "sandboxed" { return "webwidget" }        // generated (make-real) HTML widget
         }
+        if case .callout(_, _, let provenance) = payload, TutorCalloutProvenance.decode(provenance) != nil { return "tutor" }
         return "label"
     }
 
+    /// A tutor note's height follows its content (expanding the thread grows it); the top-left corner and
+    /// width stay where the journal put them.
+    private func fitTutorNote() {
+        guard let tutorNote else { return }
+        let width = max(8, CGFloat(current.width))
+        let height = max(40, tutorNote.fittingHeight(width: width))
+        bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        center = CGPoint(x: CGFloat(current.x) + width / 2, y: CGFloat(current.y) + height / 2)
+        setNeedsLayout()
+    }
+
+    /// Point the note's connector at its line, from wherever the note currently is (it follows a drag).
+    private func updateTutorConnector() {
+        guard let tutorNote, let anchor = tutorAnchor else { return }
+        let origin = CGPoint(x: center.x - bounds.width / 2, y: center.y - bounds.height / 2)
+        tutorNote.anchorInSelf = CGPoint(x: anchor.maxX + 4 - origin.x, y: anchor.midY - origin.y)
+    }
+
     private func rebuild(for kind: String) {
+        tutorNote?.removeFromSuperview(); tutorNote = nil; tutorAnchor = nil
+        resizeHandle.isHidden = false
+        deleteButton.accessibilityIdentifier = nil
         widget?.removeFromSuperview(); widget = nil
         webWidget?.deactivate(captureSnapshot: false)
         webWidget?.removeFromSuperview(); webWidget = nil
@@ -586,8 +620,23 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             layer.borderWidth = 0.5
             hostPan.isEnabled = false
             headerPan.isEnabled = true
+        } else if kind == "tutor" {
+            let note = TutorNoteView()
+            note.onReply = { [weak self] in guard let self else { return }; self.onTutorReply?(self.objectID) }
+            note.onResize = { [weak self] in self?.fitTutorNote() }
+            tutorNote = note
+            addSubview(note)
+            backgroundColor = .clear
+            layer.shadowOpacity = 0                      // the note draws its own card
+            clipsToBounds = false
+            layer.borderWidth = 0
+            resizeHandle.isHidden = true                 // height follows the content
+            deleteButton.accessibilityIdentifier = "tutorClose"
+            hostPan.isEnabled = true
+            headerPan.isEnabled = false
         } else {
             // Label card (sticky / recognized / callout / fallback).
+            layer.shadowOpacity = 0.15
             addSubview(label)
             clipsToBounds = false
             layer.borderWidth = 0
@@ -605,6 +654,14 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
 
     private func update(for payload: ObjectPayload) {
         isSticky = false
+        if let tutorNote {
+            if case .callout(_, _, let json) = payload, let provenance = TutorCalloutProvenance.decode(json) {
+                tutorNote.configure(provenance)
+                tutorAnchor = provenance.tutor.anchorRect
+                updateTutorConnector()
+            }
+            return
+        }
         if let webWidget {
             if case .widget(_, let html, _) = payload {
                 webWidget.loadHTML(html)
@@ -656,6 +713,9 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             plotButton.frame = CGRect(x: bounds.width - 109, y: 3, width: 24, height: 22)
             eraseButton.frame = CGRect(x: bounds.width - 82, y: 3, width: 24, height: 22)
             annotateButton.frame = CGRect(x: bounds.width - 55, y: 3, width: 24, height: 22)
+        } else if let tutorNote {
+            tutorNote.frame = bounds
+            updateTutorConnector()
         } else {
             label.frame = CGRect(x: 10, y: 8, width: max(0, bounds.width - 34), height: max(0, bounds.height - 16))
             textView.frame = CGRect(x: 4, y: 2, width: max(0, bounds.width - 8), height: max(0, bounds.height - 4))
@@ -683,6 +743,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             let d = g.translation(in: parent)
             center = CGPoint(x: center.x + d.x, y: center.y + d.y)
             g.setTranslation(.zero, in: parent)
+            updateTutorConnector()   // the connector stays on its line while the note moves
         case .ended, .cancelled:
             let newTransform = Transform(x: Double(center.x) - current.width / 2,
                                          y: Double(center.y) - current.height / 2,
@@ -723,6 +784,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
         guard g == hostPan else { return true }
         let p = touch.location(in: self)
         return !resizeHandle.frame.contains(p) && !deleteButton.frame.contains(p)
+            && tutorNote?.controlHit(convert(p, to: tutorNote)) == nil
     }
 
     // MARK: - Edit sticky text (double-tap → type → Done)

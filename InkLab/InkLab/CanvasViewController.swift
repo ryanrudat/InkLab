@@ -72,6 +72,10 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private var makeRealQueue: [(prompt: String, pageID: UUID)] = []
     /// Consent session for make-real, mirrored from settings via `apply(...)`. Defaults to not-consented.
     private var makeRealSession = MakeRealSession(isOnline: true, userKind: "adult", aiConsentGranted: false, ageVerified: true)
+    /// Tutor sessions with a request in flight (one tutor message at a time per session), and the
+    /// student replies waiting behind it (ink written while the tutor was still answering).
+    private var tutorBusy: Set<UUID> = []
+    private var pendingTutorReplies: [UUID: [(text: String, wantsHint: Bool, page: UUID)]] = [:]
 
     // Automatic in-canvas "@" detection: after a writing pause, OCR the NEW strokes; if they read as
     // an "@" command, run it and erase that ink. `consumedStrokeCount` marks how many strokes (from
@@ -166,6 +170,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         overlay.onRecognizeAnnotation = { [weak self] id, image in self?.recognizeAnnotationAndDrive(id, image) }
         overlay.onAnnotationChanged = { [weak self] id, data in self?.enqueueInkData(data ?? Data(), page: id) }
         overlay.annotationProvider = { [weak self] id in self?.loadInkData(page: id) }
+        overlay.onTutorReply = { [weak self] id in self?.promptTutorReply(calloutID: id) }
         store.onPersistenceError = { [weak self] error in self?.reportPersistenceFailure(error) }
 
         lassoLayer.strokeColor = UIColor.systemBlue.cgColor
@@ -236,6 +241,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         for task in activeAsyncTasks.values { task.cancel() }
         activeAsyncTasks.removeAll()
         makeRealQueue.removeAll()
+        pendingTutorReplies.removeAll()
         for case let placeholder as DesigningPlaceholderView in overlay.subviews {
             placeholder.stop()
             placeholder.removeFromSuperview()
@@ -682,6 +688,183 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
+    // MARK: - Tutor (Socratic hints on the student's own working — see Tutor.swift)
+
+    /// Read the lassoed problem + working (or the page), run the red pen on it, and put the tutor's first
+    /// hint next to it. The verdict is the engine's; the tutor only talks about it.
+    func startTutor() {
+        // The tutor talks through the proxy, so it needs the AI permission up front (the server re-checks).
+        if let reason = makeRealSession.tutorBlockReason { onStatus?(reason); return }
+        let drawing = canvasView.drawing
+        guard !drawing.strokes.isEmpty else { onStatus?("Write a problem and your working, lasso it, then tap Tutor."); return }
+        var region = drawing.bounds
+        if let lasso = lastLassoRect {
+            let clipped = lasso.intersection(drawing.bounds)
+            if !clipped.isNull, clipped.width > 1, clipped.height > 1 { region = clipped }
+        }
+        region = region.insetBy(dx: -12, dy: -12)
+        guard !region.isNull, region.width > 1, region.height > 1,
+              let raster = PencilKitAdapters.raster(drawing, region: region) else { onStatus?("Nothing to read."); return }
+        let input = RecognitionInput(
+            strokes: PencilKitAdapters.strokes(drawing), raster: raster,
+            region: Rect(x: Double(region.minX), y: Double(region.minY), width: Double(region.width), height: Double(region.height)),
+            domainHint: .math,
+            session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
+        // Where each line of the working is on the page (the note points at one of them).
+        let strokeBounds = drawing.strokes.map(\.renderBounds)
+        // The problem's own ink is not a reply: never let a pending auto-scan read it back to the tutor.
+        pendingAutoScan?.cancel(); pendingAutoScan = nil
+        consumedStrokeCount = drawing.strokes.count
+        clearLassoSelection()
+        onStatus?("Reading your working…")
+        overlay.showScan(in: region)
+        let originPage = store.pageID
+        startTrackedTask { [weak self] in
+            guard let self else { return }
+            let read = (await self.bestRead(input))?.readAs.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.overlay.hideScan()
+            guard !Task.isCancelled, !self.isDismissing else { return }
+            switch TutorSession.start(read: read, problem: region, strokes: strokeBounds) {
+            case .failure(let error): self.onStatus?(error.message)
+            case .success(let session):
+                self.tutorBusy.insert(session.id)
+                await self.requestTutorMessage(session, page: originPage)
+            }
+        }
+    }
+
+    /// New ink near a tutor session was written after a pause: read it (consent-gated, like any read)
+    /// and send it as the student's reply. An "@" command written there still runs as a command.
+    private func readTutorReply(_ input: RecognitionInput, sessionID: UUID, firedCount: Int, page: UUID) {
+        autoScanBusy = true
+        startTrackedTask { [weak self] in
+            guard let self else { return }
+            defer {
+                self.autoScanBusy = false
+                if self.autoScanNeedsRetry { self.autoScanNeedsRetry = false; self.scheduleAutoScan() }
+            }
+            let read = (await self.bestRead(input))?.readAs.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !Task.isCancelled, !self.isDismissing, self.store.pageID == page else { return }
+            self.consumedStrokeCount = firedCount   // examined — never re-read (the ink stays on the page)
+            guard !read.isEmpty else { self.onStatus?("Couldn't read your reply — try writing a little larger."); return }
+            if read.hasPrefix("@") { self.runInkCommand(read, onPage: page); return }
+            self.sendTutorReply(sessionID: sessionID, text: read, wantsHint: false, page: page)
+        }
+    }
+
+    /// Reply on a tutor callout: type an answer or a question, or just ask for the next hint.
+    private func promptTutorReply(calloutID: UUID) {
+        guard let obj = store.page.objects[calloutID], case .callout(_, _, let json) = obj.payload,
+              let provenance = TutorCalloutProvenance.decode(json) else { return }
+        let sessionID = provenance.tutor.id, page = store.pageID
+        let alert = UIAlertController(title: "Reply to the tutor",
+                                      message: "You can also write your answer on the page, next to the problem.",
+                                      preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Your answer or a question"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.accessibilityIdentifier = "tutorReplyField"
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Another hint", style: .default) { [weak self, weak alert] _ in
+            self?.sendTutorReply(sessionID: sessionID, text: alert?.textFields?.first?.text ?? "", wantsHint: true, page: page)
+        })
+        let send = UIAlertAction(title: "Send", style: .default) { [weak self, weak alert] _ in
+            let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !text.isEmpty else { return }
+            self?.sendTutorReply(sessionID: sessionID, text: text, wantsHint: false, page: page)
+        }
+        alert.addAction(send)
+        alert.preferredAction = send
+        present(alert, animated: true)
+    }
+
+    /// Add the student's reply (the engine checks any math in it) and ask for the next tutor message.
+    private func sendTutorReply(sessionID: UUID, text: String, wantsHint: Bool, page: UUID) {
+        if let reason = makeRealSession.tutorBlockReason { onStatus?(reason); return }
+        guard !tutorBusy.contains(sessionID) else {
+            pendingTutorReplies[sessionID, default: []].append((text: text, wantsHint: wantsHint, page: page))
+            onStatus?("The tutor is still answering — your reply is next.")
+            return
+        }
+        guard let current = TutorLayout.sessions(on: store.pageProjection(page))
+            .first(where: { $0.latest.provenance.tutor.id == sessionID })?.latest.provenance.tutor else {
+            onStatus?("That tutor conversation was removed.")
+            return
+        }
+        guard current.thread.count < TutorSession.maxThread else {
+            onStatus?("This conversation is getting long — lasso the problem and tap Tutor to start fresh.")
+            return
+        }
+        let next = current.addingStudentReply(text, wantsHint: wantsHint)
+        tutorBusy.insert(sessionID)
+        startTrackedTask { [weak self] in
+            await self?.requestTutorMessage(next, page: page)
+        }
+    }
+
+    /// Ask for the next tutor message on `session` (its thread already ends with the student's turn, if
+    /// any) and journal it into the session's margin note — one undoable step per message.
+    private func requestTutorMessage(_ session: TutorSession, page: UUID) async {
+        defer {
+            tutorBusy.remove(session.id)
+            drainTutorReplies(session.id)
+        }
+        onStatus?("The tutor is thinking…")
+        do {
+            let reply = try await Tutor.nextMessage(for: session, consent: makeRealSession)
+            guard !Task.isCancelled, !isDismissing else { return }
+            var next = session
+            next.rung = reply.rung
+            next.thread.append(TutorTurn(role: .tutor, text: reply.reply))
+            putTutorNote(next, reply: reply, page: page)
+            onStatus?("")
+        } catch {
+            guard !Task.isCancelled, !isDismissing else { return }
+            onStatus?(error.localizedDescription)
+        }
+    }
+
+    private func drainTutorReplies(_ sessionID: UUID) {
+        guard !isDismissing, var queue = pendingTutorReplies[sessionID], !queue.isEmpty else { return }
+        let next = queue.removeFirst()
+        pendingTutorReplies[sessionID] = queue.isEmpty ? nil : queue
+        sendTutorReply(sessionID: sessionID, text: next.text, wantsHint: next.wantsHint, page: next.page)
+    }
+
+    /// The session's margin note: inserted beside the line the verdict is about on the first message, then
+    /// updated in place (payload replaced + re-sized, one journal transaction = one undo step) for each
+    /// message after. It stays where the student moved it unless the taller note would now cover ink.
+    private func putTutorNote(_ session: TutorSession, reply: TutorReply, page: UUID) {
+        let pageObjects = store.pageProjection(page)
+        let existing = TutorLayout.sessions(on: pageObjects).first { $0.latest.provenance.tutor.id == session.id }?.latest
+        let provenance = TutorCalloutProvenance(tutor: session, turn: (existing?.provenance.turn ?? 0) + 1)
+        let payload = ObjectPayload.callout(text: reply.reply, sourceObjectIDs: [], provenanceJSON: provenance.json)
+        let width = TutorNoteStyle.current.width
+        let size = CGSize(width: width, height: TutorNoteView.height(for: provenance, width: width))
+        let ink = (page == store.pageID ? canvasView.drawing : loadedInk(page)).strokes.map(\.renderBounds)
+        let placed = TutorLayout.marginFrame(size: size, anchor: session.anchorRect, problem: session.problem,
+                                             ink: ink, canvasWidth: view.bounds.width)
+        let frame: CGRect
+        if let existing, let obj = pageObjects.objects[existing.objectID] {
+            let kept = CGRect(origin: existing.frame.origin, size: size)
+            frame = ink.contains(where: { $0.insetBy(dx: -8, dy: -8).intersects(kept) }) ? placed : kept
+            var ops: [OpPayload] = [.promote(objectID: obj.objectID, old: obj.payload, new: payload)]
+            let moved = Transform(x: Double(frame.minX), y: Double(frame.minY), width: Double(frame.width),
+                                  height: Double(frame.height), rotation: obj.transform.rotation)
+            if moved != obj.transform { ops.append(.setTransform(objectID: obj.objectID, old: obj.transform, new: moved)) }
+            commitJournal(ops, onPage: page)
+        } else {
+            frame = placed
+            insertObject(kind: .callout, payload: payload, size: size, aiProvenance: provenance.json,
+                         at: CGPoint(x: frame.midX, y: frame.midY), onPage: page)
+        }
+        if page == store.pageID {
+            canvasView.scrollRectToVisible(frame.insetBy(dx: 0, dy: -24), animated: true)
+        }
+    }
+
     // MARK: - Fit a sketched curve → a live, correct graph (InkLabFit, on-device, deterministic)
 
     /// "Bring a hand-drawn graph to life": sample the lassoed sketch (or the whole page's ink), run
@@ -856,7 +1039,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// Debounce: after the user pauses (~1.2s with no new strokes), scan the new ink for an "@" command.
     private func scheduleAutoScan() {
-        guard autoCommandsEnabled else { return }
+        guard autoCommandsEnabled || !TutorLayout.sessions(on: store.page).isEmpty else { return }
         pendingAutoScan?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.autoScanForCommand() }
         pendingAutoScan = work
@@ -865,7 +1048,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// OCR only the strokes added since we last looked. If they read as "@…", run it and erase that ink.
     private func autoScanForCommand() {
-        guard autoCommandsEnabled else { return }
+        let tutorSessions = TutorLayout.sessions(on: store.page)
+        guard autoCommandsEnabled || !tutorSessions.isEmpty else { return }
         guard !autoScanBusy else { autoScanNeedsRetry = true; return }
         let strokes = canvasView.drawing.strokes
         consumedStrokeCount = min(consumedStrokeCount, strokes.count)   // resync if ink was erased
@@ -890,6 +1074,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         )
         let firedCount = strokes.count
         let scanPage = store.pageID            // the page these strokes belong to
+        // New ink next to a tutor session's problem (or its messages) is the student's reply.
+        if let session = tutorSessions.first(where: {
+            TutorLayout.replyZone(problem: $0.latest.provenance.tutor.problem, callouts: $0.all.map(\.frame)).intersects(batch.bounds)
+        }) {
+            readTutorReply(input, sessionID: session.latest.provenance.tutor.id, firedCount: firedCount, page: scanPage)
+            return
+        }
+        guard autoCommandsEnabled else { consumedStrokeCount = strokes.count; return }
         autoScanBusy = true
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -1586,7 +1778,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             becomeFirstResponder()   // enable ⌘C/⌘X/⌘V on the selection
             let parts = [selected.isEmpty ? nil : "\(selected.count) object\(selected.count == 1 ? "" : "s")",
                          hitStrokes.isEmpty ? nil : "\(hitStrokes.count) stroke\(hitStrokes.count == 1 ? "" : "s")"].compactMap { $0 }
-            onStatus?("Selected \(parts.joined(separator: " + ")) — drag to move · tap for Cut/Copy/Delete · or Recognize/Check/Fit.")
+            onStatus?("Selected \(parts.joined(separator: " + ")) — drag to move · tap for Cut/Copy/Delete · or Recognize/Check/Tutor/Fit.")
         } else {
             clearLassoSelection()   // empty loop over blank space — nothing armed
             onStatus?("Draw the loop around writing or objects — then drag to move, or tap Recognize / Check / Fit.")
@@ -1607,11 +1799,12 @@ extension CanvasViewController: UIEditMenuInteractionDelegate {
         if Self.clipboard != nil {
             edit.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in self?.pasteClipboard() })
         }
-        // Contextual actions on the selection — Recognize / Check / Fit act on exactly the lassoed region,
+        // Contextual actions on the selection — Recognize / Check / Tutor / Fit act on exactly the lassoed region,
         // so they belong here too (not just the toolbar's ＋ menu).
         let actions: [UIAction] = [
             UIAction(title: "Recognize", image: UIImage(systemName: "text.viewfinder")) { [weak self] _ in self?.recognizeSelectionOrPage() },
             UIAction(title: "Check work", image: UIImage(systemName: "checkmark.seal")) { [weak self] _ in self?.checkWork() },
+            UIAction(title: "Tutor", image: UIImage(systemName: "graduationcap")) { [weak self] _ in self?.startTutor() },
             UIAction(title: "Fit graph", image: UIImage(systemName: "chart.xyaxis.line")) { [weak self] _ in self?.fitLassoedSketch() },
         ]
         return UIMenu(children: [UIMenu(options: .displayInline, children: edit),

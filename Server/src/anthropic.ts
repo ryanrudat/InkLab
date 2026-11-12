@@ -44,6 +44,7 @@ export function httpAnthropicClient(
             'content-type': 'application/json',
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
+            ...(opts.betas?.length ? { 'anthropic-beta': opts.betas.join(',') } : {}),
           },
           body: JSON.stringify({
             model: opts.model ?? defaultModel,
@@ -52,6 +53,7 @@ export function httpAnthropicClient(
             messages: opts.messages,
             ...(opts.thinking ? { thinking: opts.thinking } : {}),
             ...(opts.effort ? { output_config: { effort: opts.effort } } : {}),
+            ...(opts.fallbacks ? { fallbacks: opts.fallbacks } : {}),
           }),
           signal: controller.signal,
         })

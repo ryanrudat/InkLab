@@ -58,7 +58,7 @@ becomes active. `.nvmrc` pins Node 24.18.0. Railway injects `PORT` (the server a
 set **`MakeRealBaseURL`** to the `railway domain` URL.
 
 ### Auth (shared secret)
-`/make-real` and `/recognize` require `Authorization: Bearer $INKLAB_PROXY_SECRET` whenever
+`/make-real`, `/recognize` and `/tutor` require `Authorization: Bearer $INKLAB_PROXY_SECRET` whenever
 `INKLAB_PROXY_SECRET` is set (Railway variable + local `.env`); unset = open (local dev / tests).
 `/health` is always open. The app sends it from `Info.plist` `MakeRealProxySecret` (same value).
 ⚠️ **Obfuscation-grade, not real auth** — a secret embedded in a distributed app can be extracted; this
@@ -82,7 +82,37 @@ Attest) + rate limiting are still pre-ship items.
   text/expression input (graphers, calculators) to expose `window.inklab.setInput(text)` — the **widget
   input protocol** the app uses for handwrite-to-plot (fill the main input *and* trigger the
   plot/compute routine).
+- `POST /tutor` — the Socratic tutor (`src/tutor.ts`). Body: `{ session, lines, working?, corrections?,
+  chain, verdict, protected, thread, strict? }` — the working as written on the page (`lines`; "line N"
+  always means these), the engine's working after the student's verified fixes (`working`) and those fixes
+  (`corrections: [{ line, from, to }]`, described to the model against the page), the red pen's verdict on
+  `working`
+  (`allValid` / `firstError` + line, explanation, counterexample / `unsupported` + line, reason), the
+  results the engine says must never be handed over (`expression` / `equation` / `antiderivative`, in the
+  app's ASCII grammar), and the conversation so far (`{ role: 'tutor' | 'student', text, check?,
+  wantsHint?, question? }`, replayed every turn: the proxy is stateless). Returns `{ reply, rung, guard }`.
+  Replies are one or two sentences with exactly one question (≤ 280 chars, enforced; generic opening
+  praise is dropped).
+  Consent gate first. The **hint rung** (1 nudge → 2 question about the line → 3 concept → 4 worked
+  example of a different problem) is computed here from the thread: it climbs only when the student asks
+  again, and resets when the engine verifies a step of theirs. Model `claude-opus-5-5` at effort `low`
+  (`TUTOR_MODEL` overrides), server-side refusal fallback on (`server-side-fallback-2026-07-01`). Every
+  draft goes through the **answer-leak guard** (`src/mathGuard.ts`, numeric identity testing against
+  `protected`; quoting the student's own work is allowed) and a "don't contradict the checker" check
+  (also: no apologies, no line numbers past the page, and after a correction nothing saying the original
+  working was right);
+  a rejected draft is regenerated once with a stricter instruction (`guard: "regenerated"`), and if that
+  fails too — or the model refuses — a math-free generic hint is returned (`guard: "fallback"`). The
+  rejected draft is never returned or shown back to the model. For an `unsupported` verdict the opening
+  reply starts with a fixed "I can't check line N … so I won't guess" sentence. With nothing in
+  `protected` (the problem line itself was unreadable) no model is called. Errors: `400` malformed /
+  `invalid engine result` (a protected value the guard can't parse), `403` consent, `502` upstream,
+  `504` `tutor timed out` (45 s for both drafts; the app waits 50 s).
 - `GET /health` → `{ ok: true }`.
+
+`npm run mock` (`scripts/mock-proxy.ts`) runs this same server with a scripted fake Claude on `:8799` for
+Simulator UI runs: canned recognition, and a tutor whose first draft leaks the answer so the guard is
+exercised.
 
 ## The tested core (`src/`)
 - `consent.ts` — `cloudEligible(session)`; mirrors the Swift `DefaultCloudPolicy`. The server enforces
@@ -97,6 +127,9 @@ Attest) + rate limiting are still pre-ship items.
   EventSource / dynamic `import()` / css `url()` / protocol-relative `//`) — still **defense-in-depth**; the
   on-device WKWebView CSP is the real boundary.
 - `recognize.ts` — orchestration (gate → prompt → call → validate).
+- `tutor.ts` — `/tutor` validation, hint ladder, prompt, draft review, fallback hints.
+- `mathGuard.ts` — the answer-leak guard: an expression parser matching InkLabMath's grammar, numeric
+  equivalence, symbolic d/dx, and extraction of the math in a prose reply.
 - `anthropic.ts` — the real HTTP client behind the `AnthropicClient` interface (mocked in tests).
 
 ## Hardening (2026-06-09)

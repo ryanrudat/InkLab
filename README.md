@@ -19,9 +19,10 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 (least squares + R² + error bars), **linked multi-representation** (equation↔table↔best-fit), the
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
-all have working, tested cores. **137 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **34 app unit tests + UI tests** (the iPad target), plus a **TypeScript
-backend proxy** (`Server/`, **42 tests**). The journal now **persists to disk** (append-only op log +
+all have working, tested cores. **145 package tests across 12 pure-Swift library packages** (plus the
+`InkLabKit` umbrella), plus **47 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+backend proxy** (`Server/`, **85 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
+(hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
 
 **Implementation status (2026-06-09):** lasso is now **direct manipulation** (move + delete/cut/copy/paste
@@ -68,6 +69,16 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   the words; ink is never erased. Settings toggle (default on).
 - **Deterministic engines (COMPUTE)** via the `@`-command bar: `@balance`, `@molar`, `@units`,
   `@transcribe`, `@punnett`, `@check` (red-pen tutor), `@differentiate` — on the real engines.
+- **Socratic tutor** — lasso a problem + your working → **Tutor** (lasso menu or `＋`). The red pen
+  (`checkChain`) decides what's wrong; the proxy's `POST /tutor` (Claude Opus 5.5, low effort) only talks,
+  one rung of a hint ladder at a time (nudge → question about the line → concept → worked example of a
+  *different* problem), climbing only when the student asks. Every reply passes an **answer-leak guard**
+  twice — numerically on the proxy, exactly with the engine on the device — and falls back to a math-free
+  hint rather than ever showing the answer or the corrected step. Reply by writing next to the problem
+  (read after a pause; any step you write is checked by the red pen, and a verified fix is passed to the
+  tutor as a correction) or with the note's **Reply** button. The tutor lives in one **margin note** beside
+  the line it's about, with earlier messages folded away; undo rewinds the conversation a message at a
+  time. ⚠️ Needs the moderation safeguard before minors use it.
 - **Generative make-real** — `@<anything>` generates a live widget via Claude (`claude-opus-4-8`,
   `max_tokens` 8192 → one pass, no truncation round-trips), rendered in a locked-down sandboxed
   **WKWebView** (CSP `default-src 'none'`, no network, navigation/`window.open` denied). A
@@ -209,11 +220,11 @@ packages also wired in as direct, browsable local references. See **[How to run]
 
 ## Build & test
 
-The 12 pure-Swift library packages (137 tests total) run on the CLI without an iPad:
+The 12 pure-Swift library packages (145 tests total) run on the CLI without an iPad:
 ```sh
 ( cd Packages/InkLabRecognition && swift test )    # 9 tests — recognition routing/consent
 ( cd Packages/InkLabDoc         && swift test )    # 10 tests — the journal (incl. setObjectState/promote undo)
-( cd Packages/InkLabMath        && swift test )    # the red-pen tutor (algebra + calculus)
+( cd Packages/InkLabMath        && swift test )    # 32 tests — the red pen (algebra + calculus) + the tutor's leak guard
 ( cd Packages/InkLabUnits       && swift test )    # the dimensional conscience
 ( cd Packages/InkLabChem        && swift test )    # chemistry (balancing + molar mass)
 ( cd Packages/InkLabBio         && swift test )    # biology (genetics + sequences)
@@ -280,10 +291,16 @@ enforces the consent/age gate, runs the make-real multi-pass assembler, and vali
 real boundary). TypeScript runs directly on Node 24.12+ using stable native type stripping (no build
 step), while `tsc` performs a separate strict check:
 ```sh
-cd Server && npm run check                     # strict type-check + 42 offline tests
+cd Server && npm run check                     # strict type-check + 85 offline tests
+cd Server && npm run mock                      # the real server with a scripted fake Claude, on :8799
 ```
 The key is read from `Server/.env` (`ANTHROPIC_API_KEY=…`); `npm start` auto-loads it — see
 **[How to run](#how-to-run)** above. See [Server/README.md](Server/README.md).
+
+The mock proxy is for Simulator UI runs without a key: a Debug build reads `INKLAB_PROXY_URL` from its
+environment, so `TutorFlowShot` (and `SIMCTL_CHILD_INKLAB_PROXY_URL=http://localhost:8799 xcrun simctl
+launch …`) point the app at it without touching the plist. `TutorFlowShot` skips itself when the mock
+isn't running.
 
 ## Next (current to-do)
 

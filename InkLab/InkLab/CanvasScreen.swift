@@ -348,7 +348,9 @@ private struct DockBar: View {
             insertMenu
             divider
             Button { model.onUndo?() } label: { Image(systemName: "arrow.uturn.backward") }
+                .accessibilityIdentifier("undo")
             Button { model.onRedo?() } label: { Image(systemName: "arrow.uturn.forward") }
+                .accessibilityIdentifier("redo")
             divider
             Button { model.onPrevPage?() } label: { Image(systemName: axis == .vertical ? "chevron.up" : "chevron.left") }
                 .accessibilityIdentifier("prevPage")
@@ -466,6 +468,8 @@ private struct DockBar: View {
             Button { model.onRecognize?() } label: { Label("Recognize", systemImage: "text.viewfinder") }
             Button { model.onCheckWork?() } label: { Label("Check work", systemImage: "checkmark.seal") }
                 .accessibilityIdentifier("checkWork")
+            Button { model.onTutor?() } label: { Label("Tutor", systemImage: "graduationcap") }
+                .accessibilityIdentifier("tutor")
             Button { model.onFitCurve?() } label: { Label("Fit graph", systemImage: "chart.xyaxis.line") }
                 .accessibilityIdentifier("fitCurve")
             // The native, engine-backed calculator (correct by construction, on-device, no cloud).
@@ -480,6 +484,7 @@ private struct DockBar: View {
                 }
             } label: { Label("Paper", systemImage: "doc") }
         } label: { Image(systemName: "plus.circle") }
+        .accessibilityIdentifier("insertMenu")
     }
 
     /// A thin separator that runs ACROSS the dock — a vertical hairline in the horizontal bar, a
@@ -511,6 +516,7 @@ private struct CanvasRepresentable: UIViewControllerRepresentable {
         model.onInsertResult = { [weak vc] text, pageID in vc?.insertResult(text, onPage: pageID) }
         model.onRecognize = { [weak vc] in vc?.recognizeSelectionOrPage() }
         model.onCheckWork = { [weak vc] in vc?.checkWork() }
+        model.onTutor = { [weak vc] in vc?.startTutor() }
         model.onFitCurve = { [weak vc] in vc?.fitLassoedSketch() }
         model.onInsertWidget = { [weak vc] kind in vc?.insertWidget(kind: kind) }
         model.onMakeReal = { [weak vc] prompt in vc?.makeReal(prompt: prompt) }
