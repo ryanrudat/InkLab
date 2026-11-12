@@ -17,6 +17,9 @@ enum CanvasTool: String, CaseIterable, Identifiable, Sendable {
 /// An on-device transcription awaiting the user's review (the editable "Read as" + engine chips).
 struct RecognitionDraft: Identifiable, Sendable {
     let id = UUID()
+    /// The page whose ink produced this transcription. The review sheet may stay open while navigation
+    /// changes, so insertion must not silently jump to whichever page happens to be visible later.
+    let pageID: UUID
     var text: String
     var confidence: Double
     var note: String?
@@ -96,7 +99,7 @@ struct RecognitionDraft: Identifiable, Sendable {
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var onAddSticky: (() -> Void)?
-    var onInsertResult: ((String) -> Void)?
+    var onInsertResult: ((String, UUID?) -> Void)?
     var onRecognize: (() -> Void)?
     /// Explicit, on-demand "check my working" — runs the on-device deterministic red-pen tutor (no cloud).
     var onCheckWork: (() -> Void)?

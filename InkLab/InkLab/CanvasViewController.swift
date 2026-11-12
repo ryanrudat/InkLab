@@ -23,6 +23,10 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private let overlay = ObjectOverlayView()
     private let lassoLayer = CAShapeLayer()
     private var lassoPoints: [CGPoint] = []
+    private let liveLassoPath = UIBezierPath()
+    /// Gesture recognizers can deliver several sub-point moves per frame. Keeping only spatially meaningful
+    /// samples bounds final polygon hit-testing and avoids rebuilding an ever-longer path on every callback.
+    private let lassoSampleSpacing: CGFloat = 4
     // Created eagerly (not in viewDidLoad) so `apply(...)` — which SwiftUI calls from
     // makeUIViewController, BEFORE the view loads — can safely toggle it without a nil crash.
     private let lassoGesture = UIPanGestureRecognizer()
@@ -65,7 +69,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// True while a make-real generation is in flight (only one WKWebView spins up at a time).
     private var isGenerating = false
     /// Pending make-real prompts (e.g. several "@" commands written at once) — run one after another.
-    private var makeRealQueue: [String] = []
+    private var makeRealQueue: [(prompt: String, pageID: UUID)] = []
     /// Consent session for make-real, mirrored from settings via `apply(...)`. Defaults to not-consented.
     private var makeRealSession = MakeRealSession(isOnline: true, userKind: "adult", aiConsentGranted: false, ageVerified: true)
 
@@ -76,8 +80,13 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private var consumedStrokeCount = 0
     private var pendingAutoScan: DispatchWorkItem?
     private var autoScanBusy = false
+    private var autoScanNeedsRetry = false
     /// Debounced ink-blob save (coalesces rapid strokes into one write per page).
     private var pendingInkSave: DispatchWorkItem?
+    /// Recognition and generation are unstructured async work. Track every task so dismantling the
+    /// canvas cannot leave a stale controller mutating the same notebook after it is reopened.
+    private var activeAsyncTasks: [UUID: Task<Void, Never>] = [:]
+    private var isDismissing = false
 
     // Unified back/forward history for the toolbar undo/redo. Every user action — a handwriting change
     // OR a journal transaction (object insert/edit/move/delete) — is ONE ordered step, so the buttons
@@ -123,6 +132,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// Transient status messages (e.g. lasso/recognition feedback) surfaced by the SwiftUI chrome.
     var onStatus: ((String) -> Void)?
+    /// Durable storage failures must not disappear with the transient 2.8s status toast. SwiftUI renders
+    /// this as a persistent warning until the notebook is closed/reopened or recovery succeeds.
+    var onPersistenceWarning: ((String) -> Void)?
     /// Reports (1-based page index, total pages) so the chrome can show a page indicator.
     var onPageChanged: ((Int, Int) -> Void)?
     /// Called on the main actor when Vision produces a transcription to review.
@@ -152,8 +164,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         overlay.onDelete = { [weak self] id in self?.deleteObject(id) }
         overlay.onEditText = { [weak self] id, old, new in self?.editStickyText(id, old, new) }
         overlay.onRecognizeAnnotation = { [weak self] id, image in self?.recognizeAnnotationAndDrive(id, image) }
-        overlay.onAnnotationChanged = { [weak self] id, data in self?.storage.saveInk(data ?? Data(), page: id) }
-        overlay.annotationProvider = { [weak self] id in self?.storage.loadInk(page: id) }
+        overlay.onAnnotationChanged = { [weak self] id, data in self?.enqueueInkData(data ?? Data(), page: id) }
+        overlay.annotationProvider = { [weak self] id in self?.loadInkData(page: id) }
+        store.onPersistenceError = { [weak self] error in self?.reportPersistenceFailure(error) }
 
         lassoLayer.strokeColor = UIColor.systemBlue.cgColor
         lassoLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.08).cgColor
@@ -212,7 +225,45 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// Write the current page's ink synchronously now (app suspending). Object ops already persist immediately.
     @objc private func flushInkNow() {
         pendingInkSave?.cancel()
-        storage.saveInk(canvasView.drawing.dataRepresentation(), page: store.pageID)
+        saveInkData(canvasView.drawing.dataRepresentation(), page: store.pageID)
+    }
+
+    /// SwiftUI calls this only when the representable is permanently dismantled. Cancel in-flight work
+    /// before releasing the controller so late cloud/Vision results cannot mutate a reopened notebook.
+    func prepareForDismissal() {
+        guard !isDismissing else { return }
+        isDismissing = true
+        for task in activeAsyncTasks.values { task.cancel() }
+        activeAsyncTasks.removeAll()
+        makeRealQueue.removeAll()
+        for case let placeholder as DesigningPlaceholderView in overlay.subviews {
+            placeholder.stop()
+            placeholder.removeFromSuperview()
+        }
+        cancelDebouncedWorkAndFlushInk()
+    }
+
+    /// A temporary disappearance (for example a presented sheet) still closes the ink debounce window,
+    /// but must not mark the controller permanently dismissed or cancel useful in-flight recognition.
+    private func cancelDebouncedWorkAndFlushInk() {
+        pendingInkSave?.cancel(); pendingInkSave = nil
+        pendingAutoScan?.cancel(); pendingAutoScan = nil
+        flushInkNow()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        cancelDebouncedWorkAndFlushInk()
+    }
+
+    private func startTrackedTask(_ operation: @escaping () async -> Void) {
+        guard !isDismissing else { return }
+        let id = UUID()
+        let task = Task { [weak self] in
+            await operation()
+            self?.activeAsyncTasks[id] = nil
+        }
+        activeAsyncTasks[id] = task
     }
 
     override func viewDidLayoutSubviews() {
@@ -224,12 +275,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         }
         // Objects live in content coords; align the overlay's window to the scroll position.
         overlay.bounds = CGRect(origin: canvasView.contentOffset, size: view.bounds.size)
+        overlay.updateVisibleContentRect(overlay.bounds)
     }
 
     /// Keep the object overlay + paper ruling aligned with the scroll position (objects are content-coord).
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard scrollView === canvasView else { return }
         overlay.bounds = CGRect(origin: scrollView.contentOffset, size: overlay.bounds.size)
+        overlay.updateVisibleContentRect(overlay.bounds)
         paperView.contentOffsetY = scrollView.contentOffset.y
     }
 
@@ -323,10 +376,28 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     /// Record one user action onto the back stack; a new action drops the forward stack (forks history).
-    private func recordStep(_ step: HistoryStep) {
-        undoSteps.append(step)
-        if undoSteps.count > maxHistory { undoSteps.removeFirst() }
-        redoSteps.removeAll()
+    private func recordStep(_ step: HistoryStep, onPage page: UUID? = nil) {
+        let targetPage = page ?? store.pageID
+        if targetPage == store.pageID {
+            undoSteps.append(step)
+            if undoSteps.count > maxHistory { undoSteps.removeFirst() }
+            redoSteps.removeAll()
+            return
+        }
+
+        // An async result may finish after navigation. Keep its unified history with the page it actually
+        // mutated, so returning there exposes the matching undo step instead of corrupting the visible page.
+        var state: PageState
+        if let saved = savedPages[targetPage] {
+            state = saved
+        } else {
+            let ink = loadedInk(targetPage)
+            state = PageState(ink: ink, undo: [], redo: [], last: ink, consumed: ink.strokes.count)
+        }
+        state.undo.append(step)
+        if state.undo.count > maxHistory { state.undo.removeFirst() }
+        state.redo.removeAll()
+        savedPages[targetPage] = state
     }
 
     /// Set the canvas drawing ourselves (undo/redo) WITHOUT the change being recorded as a new step.
@@ -393,6 +464,16 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         return h.finalize()
     }
 
+    /// `PKDrawing.dataRepresentation()` is not byte-stable for identical content, so compare the ordered
+    /// deterministic content signatures instead. This prevents phantom history/save/OCR work on a delayed
+    /// PencilKit echo that contains exactly the authoritative strokes.
+    nonisolated static func drawingsHaveSameContent(_ a: PKDrawing, _ b: PKDrawing) -> Bool {
+        guard a.strokes.count == b.strokes.count else { return false }
+        return zip(a.strokes, b.strokes).allSatisfy { pair in
+            strokeSignature(pair.0) == strokeSignature(pair.1)
+        }
+    }
+
     /// Pure stale-render reconciliation: drop any live stroke whose signature is in `removed`, but ONLY
     /// when the drawing has grown past `baselineCount`. A resurrection ADDS strokes, so a same-count or
     /// shrinking change (e.g. a bitmap eraser splitting/removing strokes — its fragments carry NEW
@@ -422,10 +503,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// (make-real, check, recognize) commit to the page it was STARTED on, even if the user has since
     /// navigated away — the visible overlay only changes when the target IS the visible page.
     private func commitJournal(_ payloads: [OpPayload], onPage page: UUID? = nil) {
+        let targetPage = page ?? store.currentPageID
         let visibleBefore = store.page                       // current page projection, for the overlay diff
-        store.perform(payloads, onPage: page ?? store.currentPageID)
+        store.perform(payloads, onPage: targetPage)
         refresh(visibleBefore)                               // no-op for the visible page if the op targeted another page
-        recordStep(.journal)
+        recordStep(.journal, onPage: targetPage)
     }
 
     // MARK: - Pages (two-finger horizontal swipe: left = next/new, right = previous)
@@ -454,11 +536,15 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // Also cancel any pending auto-@ scan scheduled for the outgoing page so it can't OCR/run against
         // the new page (an already-in-flight scan is separately page-guarded in autoScanForCommand).
         pendingAutoScan?.cancel(); pendingAutoScan = nil
-        storage.saveInk(canvasView.drawing.dataRepresentation(), page: store.pageID)
+        saveInkData(canvasView.drawing.dataRepresentation(), page: store.pageID)
         savedPages[store.pageID] = PageState(ink: canvasView.drawing, undo: undoSteps, redo: redoSteps,
                                              last: lastDrawing, consumed: consumedStrokeCount)
         let oldPage = store.page
         store.goTo(id)
+        // An in-flight "Designing…" card belongs to the page its widget will land on, not the overlay.
+        for case let placeholder as DesigningPlaceholderView in overlay.subviews {
+            placeholder.isHidden = placeholder.pageID != id
+        }
         // Incoming page: its in-session state if we've visited it, else its persisted ink from disk.
         let s: PageState
         if let cached = savedPages[id] {
@@ -523,10 +609,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         onStatus?("Reading…")
         overlay.showScan(in: region)
         let originPage = store.pageID    // tag any result to the page the recognize was started on
-        Task { [weak self] in
+        startTrackedTask { [weak self] in
             guard let self else { return }
             defer { self.overlay.hideScan() }
             let result = await self.bestRead(input)
+            guard !Task.isCancelled, !self.isDismissing else { return }
             let read = (result?.readAs ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if read.isEmpty {
                 self.onStatus?("Couldn't read that — try writing larger and clearer.")
@@ -536,7 +623,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                 self.runInkCommand(read, onPage: originPage)
             } else {
                 self.onStatus?("")   // clear the toast before the review sheet appears
-                self.onRecognized?(RecognitionDraft(text: read, confidence: result?.confidence ?? 0, note: result?.note))
+                self.onRecognized?(RecognitionDraft(pageID: originPage, text: read,
+                                                    confidence: result?.confidence ?? 0, note: result?.note))
             }
         }
     }
@@ -552,6 +640,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                 return r
             }
         }
+        guard !Task.isCancelled else { return nil }
         return try? await recognizer.recognize(input)
     }
 
@@ -579,13 +668,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         onStatus?("Checking…")
         overlay.showScan(in: region)
         let originPage = store.pageID    // tag the verdict to the page being checked
-        Task { [weak self] in
+        startTrackedTask { [weak self] in
             guard let self else { return }
             defer { self.overlay.hideScan() }
             // Best available read: Claude vision when AI-consent is on (reads handwritten math + line
             // breaks far better than on-device Vision), else Apple Vision. The TUTOR ITSELF is the
             // deterministic InkLabMath red-pen — correct-or-silent — only the *reading* uses the cloud.
             let read = (await self.bestRead(input))?.readAs.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !Task.isCancelled, !self.isDismissing else { return }
             guard !read.isEmpty else { self.onStatus?("Couldn't read your working — try writing larger and clearer."); return }
             self.onStatus?("")
             self.insertResult(redPen(read), onPage: originPage)
@@ -633,9 +723,10 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             domainHint: .math,
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         onStatus?("Reading your writing…")
-        Task { [weak self] in
+        startTrackedTask { [weak self] in
             guard let self else { return }
             let read = (await self.bestRead(input))?.readAs.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !Task.isCancelled, !self.isDismissing else { return }
             guard !read.isEmpty else { self.onStatus?("Couldn't read that — write the formula larger and clearer."); return }
             let expr = Self.plottableExpression(read)
             self.overlay.setWidgetInput(id, expr)
@@ -677,7 +768,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // was showing resurrected ink, but record nothing. The expensive byte-compare only runs when
         // stroke counts match (rare for a real edit, which changes the count).
         if authoritative.strokes.count == lastDrawing.strokes.count,
-           authoritative.dataRepresentation() == lastDrawing.dataRepresentation() {
+           Self.drawingsHaveSameContent(authoritative, lastDrawing) {
             if stripped { reassertDrawing(authoritative) }
             return
         }
@@ -714,7 +805,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let page = store.pageID
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.storage.saveInk(self.canvasView.drawing.dataRepresentation(), page: page)
+            self.enqueueInkData(self.canvasView.drawing.dataRepresentation(), page: page)
         }
         pendingInkSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
@@ -722,8 +813,45 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// Load a page's persisted ink (empty drawing if none).
     private func loadedInk(_ page: UUID) -> PKDrawing {
-        if let data = storage.loadInk(page: page), let drawing = try? PKDrawing(data: data) { return drawing }
+        if let data = loadInkData(page: page) {
+            do { return try PKDrawing(data: data) }
+            catch { reportPersistenceFailure(error) }
+        }
         return PKDrawing()
+    }
+
+    private func loadInkData(page: UUID) -> Data? {
+        guard store.isPersistenceReadable else {
+            if let error = store.loadFailure { reportPersistenceFailure(error) }
+            return nil
+        }
+        do { return try storage.loadInk(page: page) }
+        catch { reportPersistenceFailure(error); return nil }
+    }
+
+    @discardableResult
+    private func saveInkData(_ data: Data, page: UUID) -> Bool {
+        guard store.isPersistenceAvailable else {
+            if let error = store.persistenceFailure { reportPersistenceFailure(error) }
+            return false
+        }
+        do { try storage.saveInk(data, page: page); return true }
+        catch { reportPersistenceFailure(error); return false }
+    }
+
+    private func enqueueInkData(_ data: Data, page: UUID) {
+        guard store.isPersistenceAvailable else {
+            if let error = store.persistenceFailure { reportPersistenceFailure(error) }
+            return
+        }
+        storage.saveInkAsync(data, page: page) { [weak self] error in
+            if let error { self?.reportPersistenceFailure(error) }
+        }
+    }
+
+    private func reportPersistenceFailure(_ error: Error) {
+        let detail = error.localizedDescription
+        onPersistenceWarning?("Not saved — keep this notebook open and export/retry before leaving. \(detail)")
     }
 
     /// Debounce: after the user pauses (~1.2s with no new strokes), scan the new ink for an "@" command.
@@ -737,7 +865,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// OCR only the strokes added since we last looked. If they read as "@…", run it and erase that ink.
     private func autoScanForCommand() {
-        guard autoCommandsEnabled, !autoScanBusy else { return }
+        guard autoCommandsEnabled else { return }
+        guard !autoScanBusy else { autoScanNeedsRetry = true; return }
         let strokes = canvasView.drawing.strokes
         consumedStrokeCount = min(consumedStrokeCount, strokes.count)   // resync if ink was erased
         guard strokes.count > consumedStrokeCount else { return }
@@ -762,11 +891,18 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let firedCount = strokes.count
         let scanPage = store.pageID            // the page these strokes belong to
         autoScanBusy = true
-        Task { [weak self] in
+        startTrackedTask { [weak self] in
             guard let self else { return }
-            defer { self.autoScanBusy = false }
+            defer {
+                self.autoScanBusy = false
+                if self.autoScanNeedsRetry {
+                    self.autoScanNeedsRetry = false
+                    self.scheduleAutoScan()
+                }
+            }
             // On-device first (free, private). Run EVERY "@" command found — multiple per page works.
             var read = (try? await self.recognizer.recognize(input))?.readAs ?? ""
+            guard !Task.isCancelled, !self.isDismissing else { return }
             var commands = Self.extractAtCommands(read)
             // Apple Vision misreads a handwritten "@" (often as "a"). If none were found but the scribble
             // is short and "@-shaped", re-check with the cloud recognizer — but ONLY with AI consent
@@ -777,6 +913,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                     read = cloud.readAs
                     commands = Self.extractAtCommands(read)
                 }
+                guard !Task.isCancelled, !self.isDismissing else { return }
             }
             // The user may have switched pages during recognition. If so, DON'T touch this (now-current)
             // page's consumedStrokeCount or run the command here — the strokes still live on `scanPage`
@@ -828,8 +965,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             center = explicitCenter
         } else {
             insertOffset = insertOffset >= 120 ? 0 : insertOffset + 24
+            // A reviewed async result may target a page that is no longer visible. Never borrow the
+            // current page's scroll offset for that background page; page switches reopen at the top.
+            let targetOffsetY = targetPage == store.pageID ? canvasView.contentOffset.y : 0
             center = CGPoint(x: view.bounds.midX + insertOffset,
-                             y: canvasView.contentOffset.y + view.bounds.midY + insertOffset)
+                             y: targetOffsetY + view.bounds.midY + insertOffset)
         }
         let t = Transform(x: Double(center.x - size.width / 2),
                           y: Double(center.y - size.height / 2),
@@ -856,36 +996,47 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // at completion).
         let targetPage = page ?? store.pageID
         // One generation at a time (each spawns a WKWebView + a Claude call). Extra "@"s wait their turn.
-        guard !isGenerating else { makeRealQueue.append(prompt); onStatus?("Queued “\(prompt)”…"); return }
+        guard !isGenerating else {
+            makeRealQueue.append((prompt: prompt, pageID: targetPage))
+            onStatus?("Queued “\(prompt)”…")
+            return
+        }
         isGenerating = true
         onStatus?("Designing “\(prompt)”…")
         let session = makeRealSession
-        // Show an animated "Designing…" card on the canvas where the widget will land, so the ~20s
-        // generation reads as work-in-progress rather than a frozen app. It's purely visual (not a
-        // journal object) — removed and replaced by the real widget when generation finishes.
-        let size = CGSize(width: 360, height: 568)   // ~360x540 content + 28pt header
-        let center = CGPoint(x: view.bounds.midX, y: canvasView.contentOffset.y + view.bounds.midY)
-        let placeholderFrame = CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
-                                      width: size.width, height: size.height)
-        let placeholder = DesigningPlaceholderView(prompt: prompt, frame: placeholderFrame)
+        // Show an animated "Designing…" card on the canvas where the widget will land, so the generation
+        // reads as work-in-progress rather than a frozen app. It's purely visual (not a journal object) —
+        // removed and replaced by the real widget when generation finishes. The card shape is only known
+        // once the widget arrives, so the placeholder is the default portrait card.
+        let placeholderSize = WidgetCard.size(content: WidgetLayout.portrait.contentSize)
+        // A queued job can start after the user moved to another page. That page reopens at the top, so
+        // don't borrow the visible page's scroll offset for it (same rule as `insertObject`).
+        let offsetY = targetPage == store.pageID ? canvasView.contentOffset.y : 0
+        let center = CGPoint(x: view.bounds.midX, y: offsetY + view.bounds.midY)
+        let placeholderFrame = CGRect(x: center.x - placeholderSize.width / 2, y: center.y - placeholderSize.height / 2,
+                                      width: placeholderSize.width, height: placeholderSize.height)
+        let placeholder = DesigningPlaceholderView(prompt: prompt, pageID: targetPage, frame: placeholderFrame)
+        placeholder.isHidden = targetPage != store.pageID
         overlay.addSubview(placeholder)
-        Task { [weak self] in
+        startTrackedTask { [weak self] in
             guard let self else { return }
             defer { self.isGenerating = false; self.drainMakeRealQueue() }
             do {
-                let html = try await MakeReal.provider.generate(prompt: prompt, session: session)
+                let widget = try await MakeReal.provider.generate(prompt: prompt, session: session)
+                guard !Task.isCancelled, !self.isDismissing else { return }
                 placeholder.stop(); placeholder.removeFromSuperview()
                 let provenance = (try? String(data: JSONSerialization.data(withJSONObject: ["prompt": prompt]), encoding: .utf8)) ?? "{}"
                 self.insertObject(kind: .widget,
-                                  payload: .widget(html: BlobRef(id: UUID(), kind: .widgetBundle, byteCount: html.utf8.count),
-                                                   jsState: html, sandboxPolicy: "sandboxed"),
-                                  size: size,
+                                  payload: .widget(html: BlobRef(id: UUID(), kind: .widgetBundle, byteCount: widget.html.utf8.count),
+                                                   jsState: widget.html, sandboxPolicy: "sandboxed"),
+                                  size: WidgetCard.size(content: widget.layout.contentSize),   // the shape it was designed for
                                   aiProvenance: provenance,
                                   at: center,        // drop it exactly where the placeholder was
                                   onPage: targetPage)   // …on the page the request was started on
                 self.onStatus?("Created “\(prompt)”")
             } catch {
                 placeholder.stop(); placeholder.removeFromSuperview()
+                guard !Task.isCancelled, !self.isDismissing else { return }
                 self.onStatus?("Couldn't create that — \(error.localizedDescription)")
             }
         }
@@ -893,8 +1044,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// Start the next queued make-real, if any (called when one finishes).
     private func drainMakeRealQueue() {
-        guard !isGenerating, !makeRealQueue.isEmpty else { return }
-        makeReal(prompt: makeRealQueue.removeFirst())
+        guard !isDismissing, !isGenerating, !makeRealQueue.isEmpty else { return }
+        let job = makeRealQueue.removeFirst()
+        makeReal(prompt: job.prompt, onPage: job.pageID)
     }
 
     /// Run an "@" command written in ink: exact engine for known verbs, else make-real generation.
@@ -956,10 +1108,13 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             if hasLassoSelection, lastLassoRect?.contains(p) == true {
                 beginMove(at: p)
             } else {
-                clearLassoSelection(); lassoPoints = [p]
+                clearLassoSelection()
+                lassoPoints = [p]
+                liveLassoPath.removeAllPoints()
+                liveLassoPath.move(to: p)
             }
         case .changed:
-            if movingSelection { updateMove(to: p) } else { lassoPoints.append(p); updateLassoLayer() }
+            if movingSelection { updateMove(to: p) } else { appendLassoPoint(p) }
         case .ended:
             if movingSelection { endMove(to: p) } else { finishLasso() }
         default:
@@ -967,15 +1122,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    private func updateLassoLayer() {
-        let path = UIBezierPath()
-        if let first = lassoPoints.first {
-            path.move(to: first)
-            for pt in lassoPoints.dropFirst() { path.addLine(to: pt) }
-        }
+    private func appendLassoPoint(_ point: CGPoint) {
+        if let last = lassoPoints.last,
+           hypot(point.x - last.x, point.y - last.y) < lassoSampleSpacing { return }
+        lassoPoints.append(point)
+        liveLassoPath.addLine(to: point)
         CATransaction.begin()
         CATransaction.setDisableActions(true)   // the loop must follow the finger, not ease behind it
-        lassoLayer.path = path.cgPath
+        lassoLayer.path = liveLassoPath.cgPath
         CATransaction.commit()
     }
 
@@ -1351,6 +1505,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // Select the pasted content (a rectangular marquee around it) so the user can move it right away.
         let r = CGRect(x: clip.bounds.minX + dx, y: clip.bounds.minY + dy, width: clip.bounds.width, height: clip.bounds.height).insetBy(dx: -8, dy: -8)
         selectedObjectIDs = pastedIDs
+        overlay.setSelectedObjectIDs(selectedObjectIDs)
         selectedStrokeIndices = pastedStrokeIndices
         lastLassoRect = r
         selectionMarquee = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
@@ -1385,12 +1540,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         lassoLayer.path = nil
         lassoLayer.transform = CATransform3DIdentity
         selectedObjectIDs = []
+        overlay.setSelectedObjectIDs([])
         selectedStrokeIndices = []
         selectionMarquee = []
+        liveLassoPath.removeAllPoints()
     }
 
     private func finishLasso() {
-        defer { lassoPoints = [] }
+        defer { lassoPoints = []; liveLassoPath.removeAllPoints() }
         guard lassoPoints.count >= 3 else { lassoLayer.path = nil; return }
         // Lasso bounds in CONTENT coords (overlay.bounds.origin == contentOffset) so Recognize/Check
         // read just this selection.
@@ -1422,6 +1579,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             if strokeHitTest(strokePoints: pts, lasso: polygon, mode: .intersects) { hitStrokes.append(i) }
         }
         selectedObjectIDs = selected
+        overlay.setSelectedObjectIDs(selectedObjectIDs)
         selectedStrokeIndices = hitStrokes
         selectionMarquee = lassoPoints          // remember the loop so the marquee can travel with a move
         if !selected.isEmpty || !hitStrokes.isEmpty {

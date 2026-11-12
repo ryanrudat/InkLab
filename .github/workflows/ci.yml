@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: Server/.nvmrc
+          cache: npm
+          cache-dependency-path: Server/package-lock.json
+      - run: npm ci
+      - run: npm run check
+
+  swift-packages:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift --version
+      - run: bash scripts/check.sh swift

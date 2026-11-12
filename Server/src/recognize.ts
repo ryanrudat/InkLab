@@ -34,7 +34,11 @@ export function buildRecognitionMessages(req: RecognitionRequest): AnthropicMess
 
 /// Recognition fallback: gate the session, ask Claude to transcribe to formal structure, and return
 /// only a validated result (correct-or-silent). The server enforces the gate independently.
-export async function handleRecognize(client: AnthropicClient, req: RecognitionRequest): Promise<HandlerResult> {
+export async function handleRecognize(
+  client: AnthropicClient,
+  req: RecognitionRequest,
+  signal?: AbortSignal,
+): Promise<HandlerResult> {
   const decision = cloudEligible(req.session)
   if (!decision.allowed) return { status: 403, error: decision.reason }
 
@@ -42,6 +46,7 @@ export async function handleRecognize(client: AnthropicClient, req: RecognitionR
     system: systemPrompt(req.domain),
     messages: buildRecognitionMessages(req),
     maxTokens: 1024,
+    signal,
   })
   return { status: 200, result: validateRecognition(res.text) }
 }

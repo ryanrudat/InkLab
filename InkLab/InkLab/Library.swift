@@ -45,7 +45,7 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
 
     init() {
         if let data = try? Data(contentsOf: Self.storeURL),
-           let saved = try? JSONDecoder().decode([Notebook].self, from: data), !saved.isEmpty {
+           let saved = try? JSONDecoder().decode([Notebook].self, from: data) {
             notebooks = saved
         } else {
             notebooks = [
@@ -114,16 +114,19 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     /// new notebook (`addNotebook` hardcoded ruled). Existing notebooks keep their own per-notebook paper.
     @Published var defaultPaper: PaperType { didSet { UserDefaults.standard.set(defaultPaper.rawValue, forKey: Self.defaultPaperKey) } }
     private static let snapShapesKey = "inklab.snapShapesOnHold.v1"
+    private static let leftHandedKey = "inklab.leftHanded.v1"
+    private static let fingerDrawingKey = "inklab.fingerDrawing.v1"
+    private static let autoCommandsKey = "inklab.autoCommands.v1"
     /// Draw-and-hold shape snapping: hold the pencil still after a stroke (~0.5s) and a rough line/shape
     /// snaps to a clean form. Persisted; on by default.
     @Published var snapShapesOnHold: Bool { didSet { UserDefaults.standard.set(snapShapesOnHold, forKey: Self.snapShapesKey) } }
-    @Published var leftHanded: Bool = false
+    @Published var leftHanded: Bool { didSet { UserDefaults.standard.set(leftHanded, forKey: Self.leftHandedKey) } }
     /// Allow finger/mouse to draw ink. On by default so the canvas works in the Simulator (which has
     /// no Apple Pencil); turn off on a real iPad for pencil-draws / finger-navigates (ADR 0005).
-    @Published var fingerDrawing: Bool = true
+    @Published var fingerDrawing: Bool { didSet { UserDefaults.standard.set(fingerDrawing, forKey: Self.fingerDrawingKey) } }
     /// Automatically run a handwritten "@…" command after a writing pause (no Recognize tap). Turn off
     /// for distraction-free note-taking.
-    @Published var autoCommands: Bool = true
+    @Published var autoCommands: Bool { didSet { UserDefaults.standard.set(autoCommands, forKey: Self.autoCommandsKey) } }
 
     // MARK: Cloud AI consent (ADR 0002 / App Store §5.1.2(i)) — gates every "@" make-real generation.
 
@@ -141,6 +144,9 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
         defaultPaper = UserDefaults.standard.string(forKey: Self.defaultPaperKey)
             .flatMap(PaperType.init(rawValue:)) ?? .ruled
         snapShapesOnHold = UserDefaults.standard.object(forKey: Self.snapShapesKey) as? Bool ?? true
+        leftHanded = UserDefaults.standard.object(forKey: Self.leftHandedKey) as? Bool ?? false
+        fingerDrawing = UserDefaults.standard.object(forKey: Self.fingerDrawingKey) as? Bool ?? true
+        autoCommands = UserDefaults.standard.object(forKey: Self.autoCommandsKey) as? Bool ?? true
     }
 
     /// The consent session sent with each make-real request (the server re-checks it — ADR 0002).

@@ -35,10 +35,19 @@ enum PencilKitAdapters {
     }
 
     /// Rasterize a region of the drawing for image-based recognizers (Vision / Claude).
-    static func raster(_ drawing: PKDrawing, region: CGRect, scale: CGFloat = 2.0) -> RasterImage? {
+    static func raster(_ drawing: PKDrawing, region: CGRect, scale: CGFloat = 2.0,
+                       maxPixels: CGFloat = 3_000_000) -> RasterImage? {
         guard region.width > 1, region.height > 1 else { return nil }
-        let image = drawing.image(from: region, scale: scale)
+        // Whole-page OCR at a fixed 2× can create tens of megapixels, PNG-compress on the ink run-loop,
+        // and exceed the proxy body limit. Preserve 2× for small selections but downscale large regions to
+        // a bounded pixel budget. A PencilKit page is never large enough to hit the defensive 0.25 floor.
+        let area = region.width * region.height
+        let budgetScale = sqrt(maxPixels / max(area, 1))
+        let effectiveScale = max(0.25, min(scale, budgetScale))
+        let image = drawing.image(from: region, scale: effectiveScale)
         guard let data = image.pngData() else { return nil }
-        return RasterImage(pngData: data, width: Int(image.size.width * scale), height: Int(image.size.height * scale))
+        return RasterImage(pngData: data,
+                           width: Int(image.size.width * effectiveScale),
+                           height: Int(image.size.height * effectiveScale))
     }
 }

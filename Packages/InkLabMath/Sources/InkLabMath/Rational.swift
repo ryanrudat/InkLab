@@ -91,9 +91,21 @@ public struct Rational: Hashable, Comparable, Sendable, CustomStringConvertible 
         return Rational(n, d)   // num == 0 ⇒ d == 0 ⇒ overflow
     }
     private static func intPow(_ base: Int, _ exp: Int) -> Int? {
-        var r = 1
-        for _ in 0..<exp { guard let m = cmul(r, base) else { return nil }; r = m }
-        return r
+        var result = 1
+        var factor = base
+        var exponent = exp
+        while exponent > 0 {
+            if exponent & 1 == 1 {
+                guard let multiplied = cmul(result, factor) else { return nil }
+                result = multiplied
+            }
+            exponent >>= 1
+            if exponent > 0 {
+                guard let squared = cmul(factor, factor) else { return nil }
+                factor = squared
+            }
+        }
+        return result
     }
 
     public var description: String { isOverflow ? "overflow" : (den == 1 ? "\(num)" : "\(num)/\(den)") }

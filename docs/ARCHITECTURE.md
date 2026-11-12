@@ -52,11 +52,13 @@ actually wired:
   navigation cancelled, `window.open` denied, non-persistent store) — renders generated HTML safely
   on a minor's device. This sandbox is currently a **renderer only**; the bundled JS engines for the
   §6 interpreters are not bundled yet.
-- **`MakeRealProvider`** protocol with `StubMakeRealProvider` (on-device, key-free preview),
-  `ProxyMakeRealProvider` (Server `/make-real` → Claude multi-pass assembler), and
-  `AutoMakeRealProvider` (proxy, falling back to stub). **Default = Auto.**
-- **Widget sizing:** the server prompt tells Claude to fit a ~360×540 portrait card; default card is
-  360×568; the sandbox injects the CSP into Claude's full HTML document (fixed earlier clipping).
+- **`MakeRealProvider`** protocol; the default (and only) provider is `ProxyMakeRealProvider` (Server
+  `/make-real` → Claude multi-pass assembler), returning the HTML plus its card `layout`. The stub/auto
+  fallback was removed — an unreachable server fails with a clear reason instead of a fake widget.
+- **Widget sizing:** the model declares a card shape (`<meta name="inklab-layout">`: portrait 360×540,
+  landscape 560×360, square 440×440) and designs a responsive layout for it; the card adds a 28pt header and
+  a 22pt footer (resize grip) around that content area (`WidgetCard`). The app strips stray model text and
+  places the CSP as the first element after a standards-mode doctype (`WidgetHTML.sandboxedDocument`).
 - A **native scientific calculator** (Tier A, `InkLabMath`-backed, correct-or-silent) exists to prove
   the substrate but is **not** the default path (generative is) — kept as the "known → native" option.
 
@@ -76,7 +78,7 @@ actually wired:
 
 **Cloud setup (Claude API)**
 - Server reads `ANTHROPIC_API_KEY` from `Server/.env`; `npm start` auto-loads it
-  (`node --env-file-if-exists=.env`). `.env` is gitignored (placeholder created).
+  (`node --env-file-if-exists=.env`). `.env` is gitignored and created from `.env.example`.
 - App reaches the local server over HTTP via Info.plist `NSAppTransportSecurity` →
   `NSAllowsLocalNetworking` (kept `GENERATE_INFOPLIST_FILE`; `INFOPLIST_FILE=Info.plist` merges).
 - Model id `claude-opus-4-8` (confirmed current). A real key verified end-to-end: `/health` ok,
@@ -130,7 +132,7 @@ Building on the 2026-06-07 slice. Six things shipped today:
 **Make-real polish**
 - Model `claude-opus-4-8`, `maxTokens` **8192** — one pass, no truncation round-trips. A
   **"Designing…" animation** (`DesigningPlaceholderView`) shows on the canvas where the widget will
-  land during the ~20s generation.
+  land while it generates (hidden while another page is showing).
 
 **Widget sandbox (ADR 0002 / 0005)**
 - `WebWidgetView` CSP now allows `script-src 'unsafe-eval'` (alongside `'unsafe-inline'`) so
@@ -404,7 +406,7 @@ in-memory and ink is not yet journaled.
 | InkLabSearch | notebook content search | 7 |
 | InkLabKit | umbrella — re-exports all of the above (`import InkLabKit`) | — |
 | **Library total** | 12 packages | **137** |
-| Server/ (TS) | backend proxy — gate · assembler · validation | 23 |
+| Server/ (TS) | backend proxy — gate · assembler · validation | 26 |
 
 *As built (2026-06-07):* in addition to the package tests above, the **app** now carries 16 unit
 tests + UI tests, and `InkLabDoc` is at 9 tests after adding the additive `setObjectState`/`promote`
@@ -432,7 +434,7 @@ sandbox, make-real providers) lives in the app, not the packages, to keep the pa
   physical iPad.
 
 ## Path to ship — done vs left
-**Done & verified here (no device needed):** the 12 libraries (137 tests) + the proxy core (23 tests).
+**Done & verified here (no device needed):** the 12 libraries (137 tests) + the proxy core (26 tests).
 The deterministic brain, the dispatch layer, and the cloud boundary.
 
 **Done in the app (2026-06-08 — Simulator-verified):**

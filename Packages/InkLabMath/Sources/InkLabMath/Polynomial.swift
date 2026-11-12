@@ -90,9 +90,18 @@ public struct Polynomial: Equatable, Sendable {
     public func scaled(_ c: Rational) -> Polynomial { Polynomial(terms.mapValues { $0 * c }) }
     public func power(_ e: Int) -> Polynomial {
         precondition(e >= 0)
-        var r = Polynomial.constant(.one)
-        for _ in 0..<e { r = r * self }
-        return r
+        // Exponentiation by squaring keeps the multiplication count logarithmic. The final canonical
+        // polynomial is identical, but inputs such as x^4096 no longer monopolize the caller for 4,096
+        // sequential multiplies (term-growth limits remain enforced by the canonicalizer's exponent cap).
+        var result = Polynomial.constant(.one)
+        var base = self
+        var exponent = e
+        while exponent > 0 {
+            if exponent & 1 == 1 { result = result * base }
+            exponent >>= 1
+            if exponent > 0 { base = base * base }
+        }
+        return result
     }
     public func evaluated(_ env: [String: Rational]) -> Rational {
         terms.reduce(Rational.zero) { $0 + $1.value * $1.key.evaluated(env) }

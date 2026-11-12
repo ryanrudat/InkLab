@@ -1,18 +1,25 @@
 import UIKit
 
 /// A transient "Claude is designing…" card shown on the canvas exactly where a make-real widget will
-/// land, while generation runs in the background (~20s). It is NOT a journal object — purely visual,
+/// land, while generation runs in the background. It is NOT a journal object — purely visual,
 /// not persisted, not interactive; the host removes it and drops the real widget in its place when the
 /// generation finishes (or removes it on failure). Animates a shimmer sweep + a breathing sparkle.
 final class DesigningPlaceholderView: UIView {
+    /// The page the widget will land on. The overlay is shared by every page, so the host hides this card
+    /// while another page is showing.
+    let pageID: UUID
     private let shimmer = CAGradientLayer()
+    /// Clips the sweeping band to the card. The card itself can't clip (that would also clip its shadow),
+    /// so without this the band visibly ran past the card's edges.
+    private let shimmerClip = UIView()
     private let icon = UIImageView(image: UIImage(systemName: "sparkles"))
     private let titleLabel = UILabel()
     private var dotTimer: Timer?
     private var dotPhase = 0
     private var didStart = false
 
-    init(prompt: String, frame: CGRect) {
+    init(prompt: String, pageID: UUID, frame: CGRect) {
+        self.pageID = pageID
         super.init(frame: frame)
         isUserInteractionEnabled = false           // taps pass through to the canvas
         backgroundColor = .secondarySystemBackground
@@ -31,8 +38,12 @@ final class DesigningPlaceholderView: UIView {
                           UIColor.systemBlue.withAlphaComponent(0).cgColor]
         shimmer.startPoint = CGPoint(x: 0, y: 0.5)
         shimmer.endPoint = CGPoint(x: 1, y: 0.5)
-        shimmer.cornerRadius = 16
-        layer.addSublayer(shimmer)
+        shimmerClip.isUserInteractionEnabled = false
+        shimmerClip.clipsToBounds = true
+        shimmerClip.layer.cornerRadius = 16
+        shimmerClip.layer.cornerCurve = .continuous
+        shimmerClip.layer.addSublayer(shimmer)
+        addSubview(shimmerClip)
 
         icon.tintColor = .systemBlue
         icon.contentMode = .center
@@ -68,6 +79,7 @@ final class DesigningPlaceholderView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        shimmerClip.frame = bounds
         let band = bounds.width * 0.6
         shimmer.bounds = CGRect(x: 0, y: 0, width: band, height: bounds.height)
         shimmer.position = CGPoint(x: band / 2, y: bounds.midY)

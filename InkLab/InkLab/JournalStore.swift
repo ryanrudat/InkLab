@@ -19,11 +19,22 @@ final class JournalStore {
     private var redoStacks: [UUID: [[OpPayload]]] = [:]
     private var payloadsByTxn: [UUID: [OpPayload]] = [:]
     private let logger = Logger(subsystem: "com.ryanrudat.InkLab", category: "JournalStore")
+    /// A load failure blocks all subsequent writes for this session. Appending fresh operations to an
+    /// unreadable log would make recovery harder and could make a damaged notebook look newly empty.
+    private(set) var loadFailure: Error?
+    /// Once an append fails, later appends cannot safely leapfrog it: the resulting journal could refer
+    /// to state that was never stored. Keep the session usable, but stop claiming subsequent edits save.
+    private(set) var writeFailure: Error?
+    var persistenceFailure: Error? { loadFailure ?? writeFailure }
+    var isPersistenceReadable: Bool { loadFailure == nil }
+    var isPersistenceAvailable: Bool { persistenceFailure == nil }
 
     /// Called when an op can't be persisted to disk (disk full / I/O error). The op stays in the live
     /// session (so the user doesn't see their work vanish mid-edit), but it WON'T survive relaunch — the
     /// UI should warn. Defaults to nil (logged only). Wire to a status banner.
-    var onPersistenceError: ((Error) -> Void)?
+    var onPersistenceError: ((Error) -> Void)? {
+        didSet { if let persistenceFailure { onPersistenceError?(persistenceFailure) } }
+    }
 
     /// UserDefaults key for the last page the user viewed in THIS notebook (UI state, not document data).
     private var currentPageKey: String { "inklab.currentPage.\(notebookID.uuidString)" }
@@ -34,28 +45,42 @@ final class JournalStore {
         self.projection = NotebookProjection(id: notebookID)
         self.pageIDs = []
         self.currentPageID = UUID()   // replaced below
-        let loaded = storage.loadOps()
-        if loaded.isEmpty {
-            // Fresh notebook — create and persist page 1.
+        do {
+            let loaded = try storage.loadOps()
+            if loaded.isEmpty {
+                // Fresh notebook — create and persist page 1.
+                let first = UUID()
+                currentPageID = first
+                apply([op(.addPage(meta: PageMeta(pageID: first, index: 0, extentY: 0)))], txn: nil, page: nil)
+                pageIDs = [first]
+            } else {
+                // Reload: replay the persisted op log. `fold` orders by HLC (not append order), so advance
+                // the clock past the loaded ops — new edits must sort AFTER everything already on disk.
+                log = loaded
+                clock.advance(toWall: (loaded.map { $0.hlc.wallMillis }.max() ?? 0) + 1)
+                projection = fold(log, notebookID: notebookID)
+                pageIDs = projection.pageOrder.isEmpty ? Array(projection.pages.keys) : projection.pageOrder
+                // Reopen on the page the user last viewed — NOT always page 1 — so work on later pages isn't
+                // perceived as "lost" on relaunch. Falls back to the first page if the pref is missing/stale.
+                if let saved = UserDefaults.standard.string(forKey: currentPageKey),
+                   let id = UUID(uuidString: saved), pageIDs.contains(id) {
+                    currentPageID = id
+                } else {
+                    currentPageID = pageIDs.first ?? currentPageID
+                }
+            }
+        } catch {
+            // Keep the UI operable with a temporary in-memory page, but never write it into the unreadable
+            // store. The persistent banner gives the user an honest recovery/export path instead of showing
+            // a silently "new" notebook and risking additional corruption.
+            loadFailure = error
+            logger.error("op-log load failed: \(error.localizedDescription, privacy: .public)")
             let first = UUID()
             currentPageID = first
-            apply([op(.addPage(meta: PageMeta(pageID: first, index: 0, extentY: 0)))], txn: nil, page: nil)
+            let initial = op(.addPage(meta: PageMeta(pageID: first, index: 0, extentY: 0)))
+            log = [initial]
+            projection = fold([initial], notebookID: notebookID)
             pageIDs = [first]
-        } else {
-            // Reload: replay the persisted op log. `fold` orders by HLC (not append order), so advance
-            // the clock past the loaded ops — new edits must sort AFTER everything already on disk.
-            log = loaded
-            clock.advance(toWall: (loaded.map { $0.hlc.wallMillis }.max() ?? 0) + 1)
-            projection = fold(log, notebookID: notebookID)
-            pageIDs = projection.pageOrder.isEmpty ? Array(projection.pages.keys) : projection.pageOrder
-            // Reopen on the page the user last viewed — NOT always page 1 — so work on later pages isn't
-            // perceived as "lost" on relaunch. Falls back to the first page if the pref is missing/stale.
-            if let saved = UserDefaults.standard.string(forKey: currentPageKey),
-               let id = UUID(uuidString: saved), pageIDs.contains(id) {
-                currentPageID = id
-            } else {
-                currentPageID = pageIDs.first ?? currentPageID
-            }
         }
     }
 
@@ -102,7 +127,7 @@ final class JournalStore {
         let inverse = undoTransaction(txn, in: log, using: clock)
         log.append(contentsOf: inverse)
         persist(inverse)   // persist the inverse ops too, so the undo survives relaunch
-        projection = fold(log, notebookID: notebookID)
+        projection = fold(inverse, notebookID: notebookID, from: projection)
         if let payloads = payloadsByTxn[txn] { redoStacks[currentPageID, default: []].append(payloads) }
     }
 
@@ -114,17 +139,24 @@ final class JournalStore {
     private func apply(_ ops: [Op], txn: UUID?, page: UUID?) {
         log.append(contentsOf: ops)
         persist(ops)          // durable: every op is persisted as it happens (failures surfaced, not swallowed)
-        projection = fold(log, notebookID: notebookID)
+        // New local ops always have HLCs above the projection high-water mark. Apply only this delta instead
+        // of sorting + replaying the entire ever-growing log on every object edit.
+        projection = fold(ops, notebookID: notebookID, from: projection)
         if let txn, let page { undoStacks[page, default: []].append(txn) }
     }
 
     /// Persist ops, surfacing any failure (the in-memory state already reflects them — we warn rather
     /// than roll back, so the user doesn't see their just-made edit vanish; but they're told it isn't saved).
     private func persist(_ ops: [Op]) {
+        if let persistenceFailure {
+            onPersistenceError?(persistenceFailure)
+            return
+        }
         do {
             try storage.append(ops)
         } catch {
             logger.error("op-log persist failed: \(error.localizedDescription, privacy: .public)")
+            writeFailure = error
             onPersistenceError?(error)
         }
     }

@@ -45,6 +45,36 @@ export function validateRecognition(raw: string): RecognitionResult {
   }
 }
 
+/// Pull the widget's HTML out of a model reply. The model is told to reply with the document only, but a
+/// reply can still carry a sentence of preamble, a ```html fence, or a closing remark. The WKWebView would
+/// render that stray text inside the card, and text before `<!DOCTYPE>` also drops the page into quirks
+/// mode, which shifts the whole layout. So the proxy returns only the document (or, for a fragment, only
+/// the fenced/markup part). Returns null when the reply contains no HTML at all (e.g. a prose-only answer).
+export function extractWidgetHtml(raw: string): string | null {
+  const trailingMarker = /<!--\s*INKLAB_DONE\s*-->\s*$/i
+  const docStart = raw.search(/<!doctype\s+html|<html[\s>]/i)
+  if (docStart >= 0) {
+    const closeTag = raw.toLowerCase().lastIndexOf('</html>')
+    if (closeTag > docStart) return raw.slice(docStart, closeTag + '</html>'.length)
+    // No closing tag: drop a trailing fence / marker, keep the rest of the document.
+    return raw.slice(docStart).replace(/\s*```\s*$/, '').replace(trailingMarker, '').trim()
+  }
+  // A body-level fragment: prefer the first fenced block's contents when the reply is fenced.
+  const fenced = /```[ \t]*(?:html?)?[ \t]*\r?\n([\s\S]*?)(?:\r?\n[ \t]*```|$)/i.exec(raw)
+  const fragment = (fenced ? fenced[1] : raw).replace(trailingMarker, '').trim()
+  return /<[a-z][\s\S]*>/i.test(fragment) ? fragment : null
+}
+
+/// The card shape a widget declares with `<meta name="inklab-layout" content="…">`. The app sizes the card
+/// from it (portrait 360×540, landscape 560×360, square 440×440 CSS px). Unknown/missing → portrait.
+export type WidgetLayout = 'portrait' | 'landscape' | 'square'
+
+export function widgetLayout(html: string): WidgetLayout {
+  const meta = /<meta\b[^>]*\bname\s*=\s*["']?inklab-layout["']?[^>]*>/i.exec(html)?.[0]
+  const value = meta && /\bcontent\s*=\s*["']?\s*([a-z]+)/i.exec(meta)?.[1]?.toLowerCase()
+  return value === 'landscape' || value === 'square' ? value : 'portrait'
+}
+
 /// Best-effort, DEFENSE-IN-DEPTH safety scan of a generated make-real widget. It rejects the obvious
 /// external-load / exfiltration / navigation shapes so a malformed widget is caught before it ever
 /// reaches a device. It is NOT a complete allowlist and is NOT the security boundary: the real boundary

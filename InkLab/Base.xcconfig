@@ -1,0 +1,5 @@
+// Reproducible app defaults. Keep credentials and deployed proxy settings out of this file.
+INFOPLIST_FILE = Info.plist
+
+// Optional local overrides are ignored by Git. A full local plist can override INFOPLIST_FILE.
+#include? "Secrets.xcconfig"

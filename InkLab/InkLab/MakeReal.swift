@@ -5,7 +5,13 @@ import Foundation
 /// (rendered by `WebWidgetView`). Generation is the headline "magic": "@a calculator" / "@anything" is
 /// built on the spot by Claude, not pulled from a catalog of predefined widgets.
 protocol MakeRealProvider: Sendable {
-    func generate(prompt: String, session: MakeRealSession) async throws -> String
+    func generate(prompt: String, session: MakeRealSession) async throws -> GeneratedWidget
+}
+
+/// A generated widget: its HTML plus the card shape it was designed for.
+struct GeneratedWidget: Sendable, Equatable {
+    var html: String
+    var layout: WidgetLayout
 }
 
 /// The consent/session the Server re-checks (ADR 0002) before any Claude call. Built from `AppSettings`
@@ -74,34 +80,70 @@ struct ProxyMakeRealProvider: MakeRealProvider {
 
     var baseURL = InkLabProxy.baseURL
 
-    func generate(prompt: String, session: MakeRealSession) async throws -> String {
+    /// Just over the proxy's 170 s whole-request deadline (`DEFAULT_MAKE_REAL_DEADLINE_MS`), so a slow
+    /// generation ends with the server's clear "timed out" answer rather than a client-side timeout.
+    static let requestTimeout: TimeInterval = 185
+
+    func generate(prompt: String, session: MakeRealSession) async throws -> GeneratedWidget {
         var req = URLRequest(url: baseURL.appendingPathComponent("make-real"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         InkLabProxy.authorize(&req)
-        req.timeoutInterval = 90   // generous (multi-pass), but bounded so a hung server fails cleanly
+        req.timeoutInterval = Self.requestTimeout
         req.httpBody = try JSONEncoder().encode(Request(session: session, prompt: prompt))
 
         let data: Data, resp: URLResponse
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
+        } catch let error as URLError {
+            throw MakeRealError.notConfigured(Self.message(for: error))
         } catch {
-            // Connection refused / offline / timeout → the generator isn't reachable. Say so plainly.
-            throw MakeRealError.notConfigured("InkLab’s AI generator isn’t reachable. Start the Server (see Server/README) and try again.")
+            throw MakeRealError.notConfigured(Self.unreachable)
         }
 
         guard let http = resp as? HTTPURLResponse else { throw MakeRealError.server("No response from the generator.") }
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard http.statusCode == 200 else {
-            // Surface the server's reason (e.g. 403 consent, 422 unsafe widget) instead of hiding it.
-            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let reason = body?["error"] as? String ?? String(data: data, encoding: .utf8) ?? ""
-            throw MakeRealError.server(reason.isEmpty ? "Generator error (status \(http.statusCode))." : reason)
+            throw MakeRealError.server(Self.message(status: http.statusCode, error: obj?["error"] as? String))
         }
-
-        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let html = obj?["html"] as? String, !html.isEmpty else {
             throw MakeRealError.server("The generator returned no widget.")
         }
-        return html
+        let layout = (obj?["layout"] as? String).flatMap(WidgetLayout.init(rawValue:)) ?? .portrait
+        return GeneratedWidget(html: html, layout: layout)
+    }
+
+    static let unreachable = "InkLab’s AI generator isn’t reachable. Start the Server (see Server/README) and try again."
+    static let tooSlow = "That took too long to design. Try again, or ask for something simpler."
+
+    /// A transport failure, in words that say what actually happened (a timeout is not "server down").
+    static func message(for error: URLError) -> String {
+        switch error.code {
+        case .timedOut:
+            return tooSlow
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:
+            return "You’re offline — AI generation needs a connection."
+        default:
+            return unreachable
+        }
+    }
+
+    /// The proxy's error code (Server/src/makeReal.ts, server.ts) as a message for the status toast.
+    static func message(status: Int, error: String?) -> String {
+        switch error {
+        case "declined":              return "Claude declined to build that. Try rephrasing the request."
+        case "no widget":             return "Claude answered without building a widget. Try rephrasing the request."
+        case "incomplete generation": return "The design came back unfinished. Try again."
+        case "unsafe widget":         return "That design tried to load something from the internet, so it was blocked. Try again."
+        case "generation timed out":  return tooSlow
+        case "empty prompt":          return "Write what you’d like after the “@”."
+        case "prompt too long":       return "That request is too long. Describe the widget in a sentence or two."
+        case "upstream error":        return "Claude is unavailable right now. Try again in a moment."
+        case "unauthorized":          return "The AI generator rejected this app (check MakeRealProxySecret)."
+        case let reason? where !reason.isEmpty:
+            return reason   // e.g. the consent gate's reason (403)
+        default:
+            return "Generator error (status \(status))."
+        }
     }
 }

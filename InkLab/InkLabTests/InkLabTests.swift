@@ -1,5 +1,6 @@
 import Testing
 import UIKit
+import WebKit
 import PencilKit
 import InkLabKit
 @testable import InkLab
@@ -250,6 +251,103 @@ struct InkLabTests {
         #expect(reloaded.page.objects[c]?.isDeleted == false)
     }
 
+    /// A read failure is not an empty notebook. The store exposes a temporary in-memory page for the UI,
+    /// surfaces the error, and refuses to append fresh operations into the unreadable journal.
+    @MainActor
+    @Test func unreadableJournalIsNeverReseeded() {
+        enum Failure: Error { case unreadable }
+        final class Broken: JournalStorage {
+            var appendAttempts = 0
+            func loadOps() throws -> [Op] { throw Failure.unreadable }
+            func append(_ newOps: [Op]) throws { appendAttempts += 1 }
+            func loadInk(page: UUID) -> Data? { nil }
+            func saveInk(_ data: Data, page: UUID) {}
+        }
+
+        let storage = Broken()
+        let store = JournalStore(notebookID: UUID(), storage: storage)
+        #expect(!store.isPersistenceAvailable)
+        #expect(store.pageCount == 1)          // temporary UI page, not persisted
+        #expect(storage.appendAttempts == 0)  // init did not seed over the failed read
+
+        var surfaced = false
+        store.onPersistenceError = { _ in surfaced = true }
+        #expect(surfaced)                     // late UI wiring still receives the load failure
+        store.perform([])
+        #expect(storage.appendAttempts == 0)  // subsequent edits remain in-memory only
+    }
+
+    /// A failed first append must be remembered even though the UI callback is wired after store init.
+    /// Later writes stop at the gap instead of producing a journal that references an unpersisted page.
+    @MainActor
+    @Test func initialAppendFailureBlocksLaterWritesAndSurfacesLate() {
+        enum Failure: Error { case fullDisk }
+        final class Broken: JournalStorage {
+            var appendAttempts = 0
+            func loadOps() -> [Op] { [] }
+            func append(_ newOps: [Op]) throws { appendAttempts += 1; throw Failure.fullDisk }
+            func loadInk(page: UUID) -> Data? { nil }
+            func saveInk(_ data: Data, page: UUID) {}
+        }
+
+        let storage = Broken()
+        let store = JournalStore(notebookID: UUID(), storage: storage)
+        #expect(storage.appendAttempts == 1)       // failed while persisting the initial page
+        #expect(!store.isPersistenceAvailable)
+
+        var surfaced = false
+        store.onPersistenceError = { _ in surfaced = true }
+        #expect(surfaced)                          // late UI wiring still gets the first failure
+        store.perform([])
+        #expect(storage.appendAttempts == 1)       // never leapfrog the missing initial operation
+    }
+
+    /// Only a non-newline-terminated final record is a crash tail. Repair it before future appends;
+    /// a complete but undecodable final record is real corruption and must stop the notebook loading.
+    @MainActor
+    @Test func opLogRepairsTornTailButRejectsCompleteCorruption() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notebook = UUID()
+        let storage = FileJournalStorage(notebookID: notebook, root: root)
+        let logURL = FileJournalStorage.notebookDir(notebook, root: root)
+            .appendingPathComponent("oplog.jsonl")
+
+        try Data("{\"torn\":".utf8).write(to: logURL)
+        #expect(try storage.loadOps().isEmpty)
+        #expect(try Data(contentsOf: logURL).isEmpty)       // repaired, so the next append starts cleanly
+
+        _ = JournalStore(notebookID: notebook, storage: storage) // writes one complete initial-page op
+        let terminated = try Data(contentsOf: logURL)
+        #expect(terminated.last == 0x0A)
+        try Data(terminated.dropLast()).write(to: logURL)   // JSON complete; only delimiter was torn
+        #expect(try storage.loadOps().count == 1)
+        #expect(try Data(contentsOf: logURL).last == 0x0A)   // repaired without dropping the valid op
+
+        try Data("{\"complete\":false}\n".utf8).write(to: logURL)
+        #expect(throws: JournalStorageError.self) { try storage.loadOps() }
+    }
+
+    /// An operation targeting a background page owns that page's undo stack even while another page is
+    /// visible. This is the JournalStore half of async recognition/generation page ownership.
+    @MainActor
+    @Test func offscreenTransactionKeepsOffscreenUndoOwnership() {
+        let store = JournalStore()
+        let first = store.pageID
+        let second = store.addPage()
+        let id = UUID()
+        let snap = ObjectSnapshot(objectID: id, kind: .sticky, transform: Transform(width: 160, height: 120),
+                                  pageID: second, createdBy: store.notebookID,
+                                  payload: .sticky(text: "async", colorHex: "#FFE680"))
+        store.goTo(first)
+        store.perform([.addObject(snapshot: snap)], onPage: second)
+        #expect(!store.canUndo)                // page 1 history was not polluted
+        store.goTo(second)
+        #expect(store.canUndo)
+        store.undo()
+        #expect(store.page.objects[id]?.isDeleted ?? true)
+    }
+
     /// Relaunching reopens the page the user was last on (not always page 1), so work on a later page
     /// isn't perceived as lost. The op log keeps page identity stable; the last-viewed page is UI state.
     @MainActor
@@ -409,6 +507,10 @@ struct InkLabTests {
         // resurrected stroke matches the signature we captured when it was removed). Assert it directly.
         #expect(sig(mk(7)) == sig(mk(7)))   // same content → same signature
         #expect(sig(mk(7)) != sig(mk(8)))   // different content → different signature
+        #expect(CanvasViewController.drawingsHaveSameContent(PKDrawing(strokes: [mk(7)]),
+                                                             PKDrawing(strokes: [mk(7)])))
+        #expect(!CanvasViewController.drawingsHaveSameContent(PKDrawing(strokes: [mk(7)]),
+                                                              PKDrawing(strokes: [mk(8)])))
 
         // PRIMARY (the user's report): write A, undo (baseline empty), rewrite B; PencilKit resurrects A
         // onto the stale drawing → live = [A, B]. A must be dropped, B kept.
@@ -439,5 +541,129 @@ struct InkLabTests {
         // NO GROWTH: a removed stroke present without the drawing growing is not a resurrection-add, so the
         // guard leaves it alone (only a count increase can be a stale-render resurrection).
         #expect(!strip([a, b], 2, [sig(a)]).stripped)
+    }
+
+    // MARK: - Generated widget HTML (stray model text, CSP placement, title, card sizes)
+
+    private static let widgetDoc = """
+    <!DOCTYPE html>
+    <html lang="en"><head><meta name="inklab-layout" content="square"><title>Pendulum &amp; Spring</title></head>
+    <body><svg><title>bob</title></svg><button>Go</button></body></html>
+    """
+
+    @Test func widgetHTMLStripsPreambleFencesAndMarker() {
+        let raw = "I'll build a pendulum.\n\n```html\n\(Self.widgetDoc)\n```\n<!-- INKLAB_DONE -->"
+        #expect(WidgetHTML.extractDocument(raw) == Self.widgetDoc)
+        #expect(WidgetHTML.extractDocument(Self.widgetDoc) == Self.widgetDoc)              // clean → unchanged
+        #expect(WidgetHTML.extractDocument("Here:\n```html\n<div>x</div>\n```") == "<div>x</div>")
+    }
+
+    @Test func sandboxedDocumentPutsCSPFirstInStandardsMode() {
+        let fenced = "Sure!\n```html\n\(Self.widgetDoc)\n```"
+        let doc = WidgetHTML.sandboxedDocument(fenced)
+        #expect(doc.hasPrefix("<!doctype html><meta http-equiv=\"Content-Security-Policy\""))   // nothing ahead of the CSP
+        #expect(!doc.contains("Sure!"))
+        #expect(!doc.contains("```"))
+        #expect(doc.contains("<html lang=\"en\">"))                                        // widget markup kept
+        // A document with a decorated <head …> (or none at all) still gets the CSP — and a doctype.
+        let noDoctype = WidgetHTML.sandboxedDocument("<html><head lang=\"en\"><script>1</script></head></html>")
+        #expect(noDoctype.hasPrefix("<!doctype html><meta http-equiv=\"Content-Security-Policy\""))
+        // A body fragment is wrapped in our own CSP'd document.
+        let fragment = WidgetHTML.sandboxedDocument("<div>hi</div>")
+        #expect(fragment.contains("Content-Security-Policy"))
+        #expect(fragment.contains("<body><div>hi</div></body>"))
+    }
+
+    @Test func widgetTitleComesFromTheHeadOnly() {
+        #expect(WidgetHTML.title(in: Self.widgetDoc) == "Pendulum & Spring")
+        #expect(WidgetHTML.title(in: "<html><body><svg><title>bob</title></svg></body></html>") == nil)
+        #expect(WidgetHTML.title(in: "<head><title>   </title></head>") == nil)
+    }
+
+    @Test func widgetCardSizesLeaveTheContentAreaIntact() {
+        #expect(WidgetLayout.portrait.contentSize == CGSize(width: 360, height: 540))
+        #expect(WidgetLayout(rawValue: "landscape")?.contentSize == CGSize(width: 560, height: 360))
+        let card = WidgetCard.size(content: WidgetLayout.square.contentSize)
+        #expect(card.height - WidgetCard.headerHeight - WidgetCard.footerHeight == 440)
+        // Native widgets keep their content size now that the resize grip has its own footer bar.
+        let calc = NativeWidgetRegistry.defaultSize(kind: "scientificCalculator")
+        #expect(calc.height - WidgetCard.headerHeight - WidgetCard.footerHeight == 352)
+    }
+
+    @Test func makeRealErrorsSayWhatHappened() {
+        // A timeout is not "start the server".
+        #expect(ProxyMakeRealProvider.message(for: URLError(.timedOut)) == ProxyMakeRealProvider.tooSlow)
+        #expect(ProxyMakeRealProvider.message(for: URLError(.cannotConnectToHost)) == ProxyMakeRealProvider.unreachable)
+        #expect(ProxyMakeRealProvider.message(for: URLError(.notConnectedToInternet)).contains("offline"))
+        #expect(ProxyMakeRealProvider.message(status: 504, error: "generation timed out") == ProxyMakeRealProvider.tooSlow)
+        #expect(ProxyMakeRealProvider.message(status: 422, error: "declined").contains("declined"))
+        #expect(ProxyMakeRealProvider.message(status: 403, error: "offline") == "offline")   // consent reasons pass through
+        #expect(ProxyMakeRealProvider.message(status: 500, error: nil) == "Generator error (status 500).")
+        // The client waits longer than the proxy's 170 s whole-request deadline.
+        #expect(ProxyMakeRealProvider.requestTimeout > 170)
+    }
+
+    /// End-to-end in real WebKit: a fenced, prose-wrapped reply renders as a standards-mode page with no
+    /// stray text, the widget's own <html> attributes and <title> survive, and the CSP is already in force
+    /// when the widget's FIRST script runs (an early synchronous network call is refused by policy).
+    @MainActor
+    @Test func sandboxedWidgetLoadsCleanlyInWebKit() async throws {
+        let reply = """
+        Sure! Here's your widget.
+
+        ```html
+        <!DOCTYPE html>
+        <html lang="en" data-widget="probe"><head><title>Probe</title>
+        <script>
+          window.violations = 0;
+          document.addEventListener('securitypolicyviolation', function () { window.violations++; });
+          window.early = (function () {
+            try { var x = new XMLHttpRequest(); x.open('GET', 'https://example.com/', false); x.send(); return 'allowed'; }
+            catch (e) { return 'blocked'; }
+          })();
+        </script></head><body><p>widget body</p></body></html>
+        ```
+        <!-- INKLAB_DONE -->
+        """
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 360, height: 540))
+        let waiter = NavigationWaiter()
+        web.navigationDelegate = waiter
+        web.loadHTMLString(WidgetHTML.sandboxedDocument(reply), baseURL: nil)
+        try await waiter.finished()
+        try await Task.sleep(for: .milliseconds(300))   // let the queued violation event dispatch
+
+        #expect(try await web.evaluateJavaScript("document.compatMode") as? String == "CSS1Compat")
+        #expect(try await web.evaluateJavaScript("document.body.innerText.trim()") as? String == "widget body")
+        #expect(try await web.evaluateJavaScript("document.title") as? String == "Probe")
+        #expect(try await web.evaluateJavaScript("document.documentElement.getAttribute('data-widget')") as? String == "probe")
+        #expect(try await web.evaluateJavaScript(
+            "document.head.firstElementChild.getAttribute('http-equiv')") as? String == "Content-Security-Policy")
+        #expect(try await web.evaluateJavaScript("window.early") as? String == "blocked")
+        #expect((try await web.evaluateJavaScript("window.violations") as? Int ?? 0) >= 1)   // blocked BY the CSP
+    }
+}
+
+/// Awaits a WKWebView's first navigation.
+@MainActor
+private final class NavigationWaiter: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var result: Result<Void, Error>?
+
+    func finished() async throws {
+        if let result { return try result.get() }
+        try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+
+    private func complete(_ r: Result<Void, Error>) {
+        guard result == nil else { return }
+        result = r
+        continuation?.resume(with: r)
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { complete(.success(())) }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { complete(.failure(error)) }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        complete(.failure(error))
     }
 }

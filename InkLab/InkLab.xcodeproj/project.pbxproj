@@ -40,6 +40,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D0CE00000000000000000201 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		7E6E80682FD3ADB200E7C58C /* InkLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = InkLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E6E80772FD3ADB400E7C58C /* InkLabTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = InkLabTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E6E80812FD3ADB400E7C58C /* InkLabUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = InkLabUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -104,6 +105,7 @@
 		7E6E805F2FD3ADB200E7C58C = {
 			isa = PBXGroup;
 			children = (
+				D0CE00000000000000000201 /* Base.xcconfig */,
 				7E6E806A2FD3ADB200E7C58C /* InkLab */,
 				7E6E807A2FD3ADB400E7C58C /* InkLabTests */,
 				7E6E80842FD3ADB400E7C58C /* InkLabUITests */,
@@ -449,6 +451,7 @@
 		};
 		7E6E808C2FD3ADB400E7C58C /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D0CE00000000000000000201 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -457,7 +460,6 @@
 				DEVELOPMENT_TEAM = 65ZCZ462VW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -482,6 +484,7 @@
 		};
 		7E6E808D2FD3ADB400E7C58C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D0CE00000000000000000201 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -490,7 +493,6 @@
 				DEVELOPMENT_TEAM = 65ZCZ462VW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

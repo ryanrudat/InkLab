@@ -12,6 +12,7 @@ struct CanvasScreen: View {
     @State private var command = ""
     @State private var showCommand = false
     @State private var status: String?
+    @State private var persistenceWarning: String?
     @FocusState private var commandFocused: Bool
 
     init(notebook: Notebook) {
@@ -21,7 +22,14 @@ struct CanvasScreen: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            CanvasRepresentable(model: model, notebookID: notebook.id, onStatus: { showStatus($0) })
+            CanvasRepresentable(model: model, notebookID: notebook.id,
+                                onStatus: { showStatus($0) },
+                                onPersistenceWarning: { warning in
+                                    // JournalStore may replay a deferred init failure while UIKit is being
+                                    // created inside a SwiftUI update. Assign on the next turn to avoid a
+                                    // state mutation during view reconciliation.
+                                    DispatchQueue.main.async { persistenceWarning = warning }
+                                })
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
@@ -30,6 +38,13 @@ struct CanvasScreen: View {
             }
 
             if let status { statusToast(status) }
+            if let persistenceWarning {
+                VStack {
+                    persistenceBanner(persistenceWarning)
+                    Spacer()
+                }
+                .zIndex(20)
+            }
             // The dock is its OWN view: its drag/collapse state stays local, so moving it never
             // re-renders this screen (which would re-run the canvas's updateUIViewController and stutter).
             FloatingDock(model: model)
@@ -49,7 +64,7 @@ struct CanvasScreen: View {
         .onChange(of: model.paper) { _, newPaper in library.setPaper(notebook.id, newPaper) }
         .sheet(item: $model.pendingRecognition) { draft in
             RecognitionReviewView(draft: draft) { result in
-                model.onInsertResult?(result)
+                model.onInsertResult?(result, draft.pageID)
             }
         }
         .toolbar {
@@ -86,7 +101,7 @@ struct CanvasScreen: View {
         if isDeterministicEngineCommand(text) {
             // Correctness-critical work stays with the exact engines (READ vs COMPUTE), not generation.
             let result = runCommand(text)
-            model.onInsertResult?(result)
+            model.onInsertResult?(result, nil)
             showStatus(result)
         } else {
             // Everything else — "@a clock", "@a calculator", "@a pendulum sim", anything — is GENERATED
@@ -107,6 +122,17 @@ struct CanvasScreen: View {
             .shadow(radius: 3)
             .padding(.bottom, 80)
             .transition(.opacity)
+    }
+
+    private func persistenceBanner(_ s: String) -> some View {
+        Label(s, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Color.red.opacity(0.92), in: RoundedRectangle(cornerRadius: 12))
+            .shadow(radius: 4)
+            .padding(.horizontal, 16).padding(.top, 12)
+            .accessibilityIdentifier("persistenceWarning")
     }
 
     private func showStatus(_ s: String) {
@@ -442,6 +468,11 @@ private struct DockBar: View {
                 .accessibilityIdentifier("checkWork")
             Button { model.onFitCurve?() } label: { Label("Fit graph", systemImage: "chart.xyaxis.line") }
                 .accessibilityIdentifier("fitCurve")
+            // The native, engine-backed calculator (correct by construction, on-device, no cloud).
+            Button { model.onInsertWidget?("scientificCalculator") } label: {
+                Label("Calculator", systemImage: "plus.forwardslash.minus")
+            }
+            .accessibilityIdentifier("insertCalculator")
             Divider()
             Menu {
                 ForEach(PaperType.allCases) { p in
@@ -466,16 +497,18 @@ private struct CanvasRepresentable: UIViewControllerRepresentable {
     @ObservedObject var model: CanvasModel
     let notebookID: UUID
     var onStatus: (String) -> Void
+    var onPersistenceWarning: (String) -> Void
 
     func makeUIViewController(context: Context) -> CanvasViewController {
         let vc = CanvasViewController()
         vc.notebookID = notebookID   // set BEFORE the view loads so the lazy store/storage key off it
         vc.onStatus = onStatus
+        vc.onPersistenceWarning = onPersistenceWarning
         vc.onRecognized = { [weak model] draft in model?.pendingRecognition = draft }
         model.onUndo = { [weak vc] in vc?.performUndo() }
         model.onRedo = { [weak vc] in vc?.performRedo() }
         model.onAddSticky = { [weak vc] in vc?.addSticky() }
-        model.onInsertResult = { [weak vc] t in vc?.insertResult(t) }
+        model.onInsertResult = { [weak vc] text, pageID in vc?.insertResult(text, onPage: pageID) }
         model.onRecognize = { [weak vc] in vc?.recognizeSelectionOrPage() }
         model.onCheckWork = { [weak vc] in vc?.checkWork() }
         model.onFitCurve = { [weak vc] in vc?.fitLassoedSketch() }
@@ -493,6 +526,10 @@ private struct CanvasRepresentable: UIViewControllerRepresentable {
                  tool: model.tool, fingerDrawing: model.fingerDrawing, autoCommands: model.autoCommands,
                  snapShapesOnHold: model.snapShapesOnHold, makeRealSession: model.makeRealSession)
         return vc
+    }
+
+    static func dismantleUIViewController(_ uiViewController: CanvasViewController, coordinator: ()) {
+        uiViewController.prepareForDismissal()
     }
 
     func updateUIViewController(_ vc: CanvasViewController, context: Context) {

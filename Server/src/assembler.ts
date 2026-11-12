@@ -13,12 +13,17 @@ export interface AssembleOpts {
   model?: string
   thinking?: { type: 'adaptive' | 'disabled' }
   effort?: 'low' | 'medium' | 'high' | 'max'
+  /** Per-call upstream deadline (overrides the client default). */
+  timeoutMs?: number
+  signal?: AbortSignal
 }
 
 export interface AssembleResult {
   output: string
   passes: number
   complete: boolean
+  /** The model declined the request (`stop_reason: "refusal"`). Terminal: retrying cannot help. */
+  refused?: boolean
 }
 
 // Remove ONLY the terminating marker (the model is instructed to END with it). Stripping every
@@ -48,13 +53,27 @@ export async function assembleGeneration(client: AnthropicClient, opts: Assemble
           { role: 'user', content: `Continue exactly where you left off; do not repeat anything. End with ${DONE_MARKER}` },
         ]
 
-    const res = await client.complete({ system: opts.system, messages, maxTokens: opts.maxTokens, model: opts.model, thinking: opts.thinking, effort: opts.effort })
-    accumulated += res.text
+    const res = await client.complete({
+      system: opts.system,
+      messages,
+      maxTokens: opts.maxTokens,
+      model: opts.model,
+      thinking: opts.thinking,
+      effort: opts.effort,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+    })
     passes++
+    // A refusal is final: continuing would only re-ask the same declined request (and send an empty
+    // assistant turn, which the API rejects).
+    if (res.stopReason === 'refusal') return { output: '', passes, complete: false, refused: true }
+    accumulated += res.text
 
     if (accumulated.includes(DONE_MARKER) || res.stopReason === 'end_turn') {
       return { output: stripMarker(accumulated), passes, complete: true }
     }
+    // A pass that produced nothing made no progress; another identical continuation won't either.
+    if (!res.text.trim()) break
     // otherwise: truncated → loop and continue
   }
   return { output: stripMarker(accumulated), passes, complete: false }

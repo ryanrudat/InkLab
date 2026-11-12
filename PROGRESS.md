@@ -1,14 +1,48 @@
 # InkLab — Progress & To-Do
 
-_Living status doc. Last updated: 2026-06-25._
+_Living status doc. Last updated: 2026-11-12._
 For the system overview see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); for decisions, [docs/decisions/](docs/decisions/).
 Repo: <https://github.com/ryanrudat/InkLab> (public).
 
 ## Snapshot
-- **App: 24 unit tests + UI tests** (engine routing incl. the `@molar` fix, calculator-via-engine, widget insert+edit+undo, object delete+undo, sticky text edit+undo, **undo-resurrection identity-strip**, differentiate-parenthesization, Vision-reads-rendered-text incl. "@"); **InkLabDoc package: 10 tests** (incl. `setObjectState`/`promote` one-step undo). Library packages (12) = **137 total** (incl. **InkLabCanvasCore 25** — +14 shape-recognition tests added 2026-06-16); **backend proxy: 23 tests**. All green.
+- **App: 34 unit tests + UI tests** (engine routing incl. the `@molar` fix, calculator-via-engine, widget insert+edit+undo, object delete+undo, sticky text edit+undo, **undo-resurrection identity-strip**, differentiate-parenthesization, Vision-reads-rendered-text incl. "@"); **InkLabDoc package: 10 tests** (incl. `setObjectState`/`promote` one-step undo). Library packages (12) = **137 total** (incl. **InkLabCanvasCore 25** — +14 shape-recognition tests added 2026-06-16); **backend proxy: 42 tests**. All green.
 - iPad app **builds and runs on an iPadOS 18 Simulator** to a **Home/Library → Canvas**, and the **full on-device → make-real → cloud loop works end-to-end** (verified live against the real Anthropic API).
 - All §12 foundational decisions resolved across ADRs 0001–0005. Git baseline committed.
 - **The deterministic "brain" plus the live make-real loop are now real in the app; remaining work is mostly compliance, persistence, on-device validation, and §6 interpreter UI.**
+
+### 🎨 Make-real generation fixes (2026-11-12)
+A review of how `@` requests become widgets found the card-design problems came from the pipeline, not
+the model. Fixed, with server + app tests:
+- **Stray model text rendered inside the widget.** The proxy returned Claude's reply verbatim, so a
+  sentence of preamble or a ```` ```html ```` fence showed up as text at the top of the card, and (ahead
+  of `<!DOCTYPE>`) put the page into quirks mode, pushing the layout off the card. The proxy now keeps only
+  the HTML document (`extractWidgetHtml`); the app does the same at render time (`WidgetHTML`), which also
+  repairs widgets saved before the fix. The prompt now asks for the document only.
+- **CSP placement.** The CSP was only injected when the HTML contained a literal `<head>`; it is now always
+  the first element after a standards-mode doctype, ahead of any widget script.
+- **Chrome over the content.** The resize grip sat on the widget's bottom-right corner (where a
+  calculator's `=` lives); widget cards now have a footer bar for it. Native widget default sizes grew by
+  the footer height so their content area is unchanged.
+- **One portrait card for everything / fixed layouts.** The model now declares portrait, landscape or square
+  and designs a responsive layout; the card is sized from it.
+- **Dark mode.** Generated cards render light (the prompt asks for explicit light backgrounds).
+- **Header** shows the widget's `<title>` instead of "Generated".
+- **Timeouts reported as "server not running".** The app waited 90s while the server allowed 120s × 5
+  passes. The server now has a 170s whole-request deadline (504) and the app waits 185s; timeouts, offline,
+  refusals, unsafe and incomplete widgets each get their own message.
+- **Refusals** no longer loop through all 5 passes (each sending an empty assistant turn).
+- **"Designing…" card on the wrong page** after a page switch; it is now hidden unless its page is showing,
+  and a queued job's placeholder no longer borrows the visible page's scroll offset.
+- **Native calculator** was unreachable; it's now in the `＋` menu (`@calculator` still generates).
+- **"Designing…" shimmer** ran past the card's edges (the card can't clip without clipping its shadow);
+  it is now clipped to the card.
+- **Verified:** 42 server tests, 34 app unit tests (incl. a real-`WKWebView` test: standards mode, no stray
+  text, CSP in force before the widget's first script), and a Simulator UI run against a mock proxy
+  returning a fenced, prose-wrapped landscape widget (clean card, `<title>` header, grip in the footer,
+  placeholder hidden on another page and the widget landing on its own page).
+- ⚠️ Not yet verified against the live API or on a device: how the model follows the new prompt (layout
+  choice, responsiveness) and how the new card chrome feels with a Pencil. The Railway proxy needs a
+  redeploy to pick up the server changes (the app-side cleanup works either way).
 
 ### 🛡️ Correctness/safety hardening pass (2026-06-08, multi-agent bug hunt + adversarial verify)
 A 12-area deep review (each finding independently re-verified against the real code) surfaced a class of
@@ -176,7 +210,7 @@ through a multi-agent adversarial review.
 
 ### Backend proxy (`Server/`, TypeScript/Node)
 - [x] Consent/age gate (server-enforced).
-- [x] Make-real multi-pass assembler — **now wired to the real Claude API** (`claude-opus-4-8`); the prompt instructs Claude to fit a ~360×540 portrait card.
+- [x] Make-real multi-pass assembler — **now wired to the real Claude API** (`claude-opus-4-8`); orchestration + prompt in `src/makeReal.ts`. The prompt asks for the raw document only, a declared card shape (`inklab-layout`), a responsive light design and a short `<title>`; the proxy keeps only the HTML document, stops on a refusal, and caps a request at 170s (504).
 - [x] Correct-or-silent recognition validation + widget-safety check (regex validator is defense-in-depth; the WKWebView lockdown is the real boundary).
 - [x] HTTP entry (`/recognize`, `/make-real`, `/health`); reads `ANTHROPIC_API_KEY` from `Server/.env` (gitignored; `npm start` auto-loads via `node --env-file-if-exists=.env`).
 - [x] **Verified live end-to-end**: `/health` ok, `/make-real` generated a real widget, `/recognize` read "@a clock" at 0.97 confidence.
@@ -267,7 +301,7 @@ through a multi-agent adversarial review.
 - [x] **Locked-down WKWebView sandbox** (`WebWidgetView`): CSP `default-src 'none'`, no network, navigation cancelled, `window.open` denied, non-persistent store — renders generated HTML safely on a minor's device. The CSP is injected into Claude's full HTML document. **(2026-06-08)** `script-src` now also allows **`'unsafe-eval'`** so graphers/calculators can evaluate a user-typed expression (`new Function`/`eval`) — previously they failed with a CSP "Refused to evaluate a string as JavaScript" error. Safe: the boundary is **network isolation** (`default-src 'none'` + `baseURL nil` + nav-delegate + server validator), which eval doesn't touch; the widget already runs arbitrary inline JS and stays fully offline. CSP is injected at **render time**, so existing broken widgets work after the app update — no regeneration.
 - [x] **Swappable `MakeRealProvider`**: default is now `ProxyMakeRealProvider` (Server `/make-real` → Claude multi-pass assembler). The silent stub/auto fallback was **removed** (2026-06-07) — when the server is unreachable or the session is ineligible, the request **fails with a clear reason** (`MakeRealError: LocalizedError`), never a fake one-button widget. (This is what masked the original "@x → just a button" bug.)
 - [x] **`@<anything>`** (typed or handwritten) generates a live widget via Claude; deterministic verbs stay on the exact engines (READ vs COMPUTE). **Verified live**: "@scientific calculator" generated a working calculator that fits the card; "@a clock" generated a live ticking JS clock.
-- [x] **Widget sizing**: server prompt targets a ~360×540 portrait card; default card 360×568; fixed earlier clipping.
+- [x] **Widget sizing**: the model picks portrait 360×540 / landscape 560×360 / square 440×440 and the card is sized to match (+28pt header, +22pt footer that holds the resize grip, so the grip never covers the widget's controls). Layouts are responsive, so resizing reflows them.
 - [~] **Write ON a widget — annotate + erase + handwrite-to-plot (2026-06-08, erase + crisp-render 2026-06-22).** A `WidgetAnnotationView` ink layer sits **above** each generated widget (so ink renders over the graph): **Pencil draws, finger operates the widget**, plus a header **✏️ toggle** so finger-draw works in the Simulator (no Pencil). **Erase (2026-06-22):** a header **🧽 toggle** rubs out whole strokes with finger or Pencil (mutually exclusive with ✏️; header tints red), and a Pencil **erases whenever the global Eraser tool is active** (`pencilErases`) — which also fixed a latent bug where the Eraser tool *drew* on widgets. A header **ƒ** button rasterizes the writing, recognizes it (consent-gated, same pipeline as Recognize), strips a leading `y =`/`f(x) =`, and feeds the expression into the widget via a new **widget input protocol** (`window.inklab.setInput(text)` added to the generator prompt) with a JS **fallback** (fill first input + click a plot/compute button) for already-generated widgets. Annotation strokes **persist per object** (reuses `JournalStorage` keyed by objectID) — incl. a *cancelled* erase (fixed in review). **Crisp render (2026-06-22):** the generated widget's `WKWebView` no longer paints off-screen at the wrong scale, so it's sharp on reopen (see the 06-22 finalized note / ADR 0005). Build clean. ⚠️ **Needs a device pass**: Pencil-vs-finger routing and the recognize→plot round-trip can't be touch-tested here. **TODO:** make annotation strokes undoable (own history step); formalize per-object blob storage (currently shares the ink store); the input protocol only helps widgets that implement it (fallback is best-effort).
 - [x] **Native scientific calculator** (Tier A reference — pure Swift, InkLabMath-backed, correct-or-silent) built to prove the substrate; **NOT** the default path (generative is). Kept as the brief's "known→native" option.
 - [x] **Robustness**: in-flight guard (no overlapping generations), 90s network timeout, and a **client-side consent gate** that blocks (with a reason) before any network call.

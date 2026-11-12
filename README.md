@@ -20,8 +20,8 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
 all have working, tested cores. **137 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **24 app unit tests + UI tests** (the iPad target), plus a **TypeScript
-backend proxy** (`Server/`, **23 tests**). The journal now **persists to disk** (append-only op log +
+`InkLabKit` umbrella), plus **34 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+backend proxy** (`Server/`, **42 tests**). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
 
 **Implementation status (2026-06-09):** lasso is now **direct manipulation** (move + delete/cut/copy/paste
@@ -71,9 +71,14 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
 - **Generative make-real** — `@<anything>` generates a live widget via Claude (`claude-opus-4-8`,
   `max_tokens` 8192 → one pass, no truncation round-trips), rendered in a locked-down sandboxed
   **WKWebView** (CSP `default-src 'none'`, no network, navigation/`window.open` denied). A
-  **"Designing…" animation** holds the widget's spot on the canvas during the ~20s generation. Verified
-  live: "@scientific calculator" produced a working calculator that fits the card. Falls back to an
-  on-device key-free stub when the server is down.
+  **"Designing…" animation** holds the widget's spot on the canvas while it generates (only on the page
+  it will land on). The model picks a **card shape** for the content — portrait 360×540, landscape
+  560×360 or square 440×440 — and the card is sized to match; the layout is responsive, so resizing the
+  card reflows it. Only the HTML document is kept (any stray preamble / ```` ``` ```` fences are stripped
+  on the server *and* in the app), and the CSP is always placed ahead of the widget's own markup. The
+  card's header shows the widget's `<title>`. A generation is capped at 170s on the server; failures say
+  what happened (timed out, declined, offline, server unreachable). There is no fake fallback widget
+  when the server is down — the request fails with a clear reason.
 - **Write-on-a-widget** — a Pencil ink layer above each generated widget (Pencil draws / finger operates
   the widget; an `✏️` header toggle enables finger-draw in the Simulator). **Erase** with the `🧽` header
   toggle (finger or Pencil rubs out whole strokes) — and a Pencil also erases when the global **Eraser**
@@ -90,8 +95,9 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   no cloud, no consent gate — correct by construction. (A freehand sketch has no axes, so coefficients
   are in the sketch's own normalized units; the trustworthy outputs are the model *type*, the curve,
   and R².)
-- **Object editing chrome** — delete (✕), resize grip (reflows generated widgets), double-tap a sticky
-  to edit text inline — all undoable via the journal.
+- **Object editing chrome** — delete (✕), resize grip (reflows generated widgets; on widget cards it
+  sits in its own footer bar so it never covers the widget's controls), double-tap a sticky to edit text
+  inline — all undoable via the journal. The native calculator is in the `＋` menu.
 - **Lasso that coexists with navigation** — two-finger scroll and page-swipe work while the lasso tool
   is active (the lasso captures only single-finger touches); the dashed marquee persists as a closed
   loop, and handwriting strokes are hit-tested so lassoing ink reports honestly.
@@ -233,18 +239,31 @@ MyScript bridge are still to come.)
 git clone https://github.com/ryanrudat/InkLab.git
 cd InkLab
 ```
-You need **Xcode 26+** (Swift 6, iOS/iPadOS 18 SDK) for the app and **Node 23+** for the backend proxy.
+You need **Xcode 26+** (Swift 6, iOS/iPadOS 18 SDK) for the app and **Node 24.12+** for
+the backend proxy. `Server/.nvmrc` pins the current Node 24 LTS release used by CI.
 
-1. **Backend proxy** — paste your Anthropic key into `Server/.env` (the file is created with a
-   placeholder and is gitignored), then:
+1. **Backend proxy** — install the locked development tools, copy the secret-free environment
+   template, and paste your Anthropic key into the new gitignored `Server/.env`:
    ```sh
-   cd Server && npm start          # auto-loads .env; proxy on :8787
+   cd Server
+   nvm use
+   npm ci
+   cp .env.example .env
+   npm run check
+   npm start                       # auto-loads .env; proxy on :8787
    ```
    The model id is `claude-opus-4-8`. Verified live end-to-end: `/health`, `/make-real` (generates a
    real widget), and `/recognize` (reads "@a clock" at 0.97 confidence).
-2. **The app** — open `InkLab/InkLab.xcodeproj` in Xcode and **Run on an iPadOS 18+ simulator**. The
-   app reaches the local server over HTTP via `Info.plist` `NSAllowsLocalNetworking`. *On a real
-   device*, point the proxy URL at the Mac's LAN IP (or a deployed host) instead of `localhost`.
+2. **The app** — open `InkLab/InkLab.xcodeproj` in Xcode and **Run on an iPadOS 18+ simulator**.
+   The tracked, secret-free `InkLab/Info.plist` is ready for `localhost` and permits local networking.
+   For a real iPad or deployed proxy, create ignored local overrides, then edit only
+   `Info.local.plist`:
+   ```sh
+   cp InkLab/Info.plist InkLab/Info.local.plist
+   cp InkLab/Secrets.xcconfig.example InkLab/Secrets.xcconfig
+   ```
+   Set `MakeRealBaseURL` to the Mac's LAN URL or deployed HTTPS URL and set
+   `MakeRealProxySecret` when the proxy requires it. These local files remain untracked.
 
 The app target builds **only in Xcode** (needs the iOS SDK). It depends on the **`InkLabKit`** umbrella
 package (`Packages/InkLabKit`), which re-exports every library — so the app just writes
@@ -258,9 +277,10 @@ Canvas code lives in `InkLab/InkLab/` (`CanvasViewController`, `ObjectOverlayVie
 All Anthropic calls go through a server-side proxy (ADR 0002) — the iPad never holds the API key. It
 enforces the consent/age gate, runs the make-real multi-pass assembler, and validates model output
 (correct-or-silent; the regex widget-HTML validator is defense-in-depth — the WKWebView lockdown is the
-real boundary). TypeScript, run directly by Node 23+ (no build step):
+real boundary). TypeScript runs directly on Node 24.12+ using stable native type stripping (no build
+step), while `tsc` performs a separate strict check:
 ```sh
-cd Server && npm test                          # no network
+cd Server && npm run check                     # strict type-check + 42 offline tests
 ```
 The key is read from `Server/.env` (`ANTHROPIC_API_KEY=…`); `npm start` auto-loads it — see
 **[How to run](#how-to-run)** above. See [Server/README.md](Server/README.md).

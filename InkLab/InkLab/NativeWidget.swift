@@ -40,11 +40,12 @@ enum NativeWidgetRegistry {
         }
     }
 
+    /// The full card size (content + header + footer bars).
     static func defaultSize(kind: String) -> CGSize {
         switch kind {
-        case "scientificCalculator": return CGSize(width: 260, height: 380)
-        case "fitGraph":             return CGSize(width: 360, height: 300)
-        default:                     return CGSize(width: 240, height: 240)
+        case "scientificCalculator": return WidgetCard.size(content: CGSize(width: 260, height: 352))
+        case "fitGraph":             return WidgetCard.size(content: CGSize(width: 360, height: 272))
+        default:                     return WidgetCard.size(content: CGSize(width: 240, height: 212))
         }
     }
 

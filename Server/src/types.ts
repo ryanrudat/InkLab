@@ -47,6 +47,10 @@ export interface CompleteOpts {
   model?: string
   thinking?: { type: 'adaptive' | 'disabled' }
   effort?: 'low' | 'medium' | 'high' | 'max'
+  /** Per-call deadline in ms; overrides the client's default request timeout. */
+  timeoutMs?: number
+  /** Cancels an in-flight upstream request, for example when the downstream client disconnects. */
+  signal?: AbortSignal
 }
 export interface AnthropicClient {
   complete(opts: CompleteOpts): Promise<AnthropicResponse>

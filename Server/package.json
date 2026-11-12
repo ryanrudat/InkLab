@@ -4,9 +4,17 @@
   "private": true,
   "type": "module",
   "description": "InkLab backend proxy — the server-side boundary for all Anthropic calls (ADR 0002).",
-  "engines": { "node": ">=23.6" },
+  "engines": {
+    "node": ">=24.12.0 <25"
+  },
   "scripts": {
+    "check": "npm run typecheck && npm test",
     "test": "node --test",
+    "typecheck": "tsc --noEmit",
     "start": "node --env-file-if-exists=.env src/server.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.12",
+    "typescript": "5.9.3"
   }
 }
