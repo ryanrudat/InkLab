@@ -418,13 +418,14 @@ enum TutorLayout {
         return (0..<count).map { CGRect(x: problem.minX, y: problem.minY + CGFloat($0) * h, width: problem.width, height: h) }
     }
 
-    /// Where the margin note goes: level with the line it is about, to the right of all the ink in its band
+    /// Where the margin note goes: level with the line it is about, to the right of everything in its band
     /// (leaving room for the note to grow as the conversation goes on), so it never covers the student's
-    /// writing. With no room in the margin, it goes under the ink below the problem.
-    static func marginFrame(size: CGSize, anchor: CGRect, problem: CGRect, ink: [CGRect], canvasWidth: CGFloat,
+    /// writing or another object (a widget's controls, a sticky). With no room in the margin, it goes under
+    /// everything below the problem. `avoiding` = ink bounds + object frames (see `obstacles`).
+    static func marginFrame(size: CGSize, anchor: CGRect, problem: CGRect, avoiding: [CGRect], canvasWidth: CGFloat,
                             growth: CGFloat = 160) -> CGRect {
         let y = max(8, anchor.midY - 22)
-        func hits(_ rect: CGRect) -> [CGRect] { ink.filter { !$0.isNull && $0.insetBy(dx: -8, dy: -8).intersects(rect) } }
+        func hits(_ rect: CGRect) -> [CGRect] { avoiding.filter { !$0.isNull && $0.insetBy(dx: -8, dy: -8).intersects(rect) } }
         for room in [growth, 0] {
             var rect = CGRect(x: max(problem.maxX, anchor.maxX) + 28, y: y, width: size.width, height: size.height + room)
             for _ in 0..<50 {
@@ -438,6 +439,21 @@ enum TutorLayout {
         let column = CGRect(x: x, y: problem.minY, width: size.width, height: .greatestFiniteMagnitude)
         let below = (hits(column).map(\.maxY) + [problem.maxY]).max()! + 16
         return CGRect(x: x, y: below, width: size.width, height: size.height)
+    }
+
+    /// What the note must not cover: the page's ink plus every other live object on it (widgets, stickies,
+    /// callouts, other tutors' notes). `except` is the note itself when it is being updated.
+    static func obstacles(ink: [CGRect], page: PageProjection, except: UUID?) -> [CGRect] {
+        ink + page.objects.values.filter { !$0.isDeleted && $0.objectID != except }.map {
+            CGRect(x: $0.transform.x, y: $0.transform.y, width: $0.transform.width, height: $0.transform.height)
+        }
+    }
+
+    /// A z above every object on the page, so the note is always drawn on top (objects otherwise all share
+    /// the default rank, which leaves their order to chance).
+    static func topZ(on page: PageProjection) -> FractionalIndex {
+        let top = page.objects.values.filter { !$0.isDeleted }.map(\.z.rank).max() ?? "m"
+        return FractionalIndex(max(top, "y") + "m")
     }
 
     /// Ink written here (after a pause) is a reply to the session: around the problem and its note.

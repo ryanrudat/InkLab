@@ -163,19 +163,43 @@ struct TutorTests {
     @Test func theNoteSitsInTheMarginAndNeverCoversInk() {
         let problem = CGRect(x: 40, y: 90, width: 210, height: 140)
         let size = CGSize(width: 280, height: 120)
-        let frame = TutorLayout.marginFrame(size: size, anchor: rows[1], problem: problem, ink: rows, canvasWidth: 820)
+        let frame = TutorLayout.marginFrame(size: size, anchor: rows[1], problem: problem, avoiding: rows, canvasWidth: 820)
         #expect(frame.minX > problem.maxX && abs(frame.minY - (rows[1].midY - 22)) < 0.5)
         #expect(!rows.contains { $0.intersects(frame) })
 
         // Other writing to the right of the problem pushes the note further out.
         let other = CGRect(x: 300, y: 140, width: 120, height: 30)
-        let pushed = TutorLayout.marginFrame(size: size, anchor: rows[1], problem: problem, ink: rows + [other], canvasWidth: 820)
+        let pushed = TutorLayout.marginFrame(size: size, anchor: rows[1], problem: problem, avoiding: rows + [other], canvasWidth: 820)
         #expect(pushed.minX > other.maxX && !(rows + [other]).contains { $0.intersects(pushed) })
 
         // No room in the margin: under the ink, still covering nothing.
         let wall = CGRect(x: 280, y: 0, width: 520, height: 600)
-        let below = TutorLayout.marginFrame(size: size, anchor: rows[1], problem: problem, ink: rows + [wall], canvasWidth: 820)
+        let below = TutorLayout.marginFrame(size: size, anchor: rows[1], problem: problem, avoiding: rows + [wall], canvasWidth: 820)
         #expect(!(rows + [wall]).contains { $0.intersects(below) } && below.minY > problem.maxY)
+    }
+
+    /// The bug from the theme pass: a calculator in the middle of the page, working to its left — the note
+    /// used to land on the calculator's keys, sometimes above it and sometimes below it.
+    @Test func theNoteNeverCoversAnotherObjectAndIsDrawnOnTop() {
+        let store = JournalStore()
+        let calculator = ObjectSnapshot(objectID: UUID(), kind: .widget, transform: Transform(x: 297, y: 405, width: 250, height: 385),
+                                        pageID: store.pageID, createdBy: store.notebookID,
+                                        payload: .widget(html: BlobRef(id: UUID(), kind: .widgetBundle, byteCount: 0), jsState: "{}",
+                                                         sandboxPolicy: "native:scientificCalculator"))
+        store.perform([.addObject(snapshot: calculator)])
+        let lines = [CGRect(x: 60, y: 640, width: 180, height: 8), CGRect(x: 60, y: 690, width: 120, height: 8),
+                     CGRect(x: 60, y: 740, width: 90, height: 8)]
+        let problem = CGRect(x: 48, y: 628, width: 204, height: 132)
+        let avoid = TutorLayout.obstacles(ink: lines, page: store.page, except: nil)
+        let frame = TutorLayout.marginFrame(size: CGSize(width: 280, height: 150), anchor: lines[1], problem: problem,
+                                            avoiding: avoid, canvasWidth: 820)
+        let calculatorFrame = CGRect(x: 297, y: 405, width: 250, height: 385)
+        #expect(!frame.intersects(calculatorFrame), "the note covered the calculator: \(frame)")
+        #expect(!lines.contains { $0.intersects(frame) })
+        // The note being updated doesn't avoid itself; deleted objects aren't obstacles.
+        #expect(TutorLayout.obstacles(ink: [], page: store.page, except: calculator.objectID).isEmpty)
+        // Drawn above every object on the page (they all share the default rank otherwise).
+        #expect(TutorLayout.topZ(on: store.page) > calculator.z)
     }
 
     @Test func onlyTheLatestMessageShowsTheRestFoldsIntoEarlier() throws {

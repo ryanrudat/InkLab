@@ -9,7 +9,7 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
 - iPad app **builds and runs on an iPadOS 18 Simulator** to a **Home/Library → Canvas**, and the **full on-device → make-real → cloud loop works end-to-end** (verified live against the real Anthropic API).
 - All §12 foundational decisions resolved across ADRs 0001–0005. Git baseline committed.
 - **The deterministic "brain" plus the live make-real loop are now real in the app; remaining work is mostly compliance, persistence, on-device validation, and §6 interpreter UI.**
-- **Socratic tutor (2026-11-12):** **13 app unit tests** (`TutorTests`) + the `TutorFlowShot` UI run, **InkLabMath 32** (8 new), **43 proxy tests** for `/tutor` + the leak guard. Full suites green: app 47, packages 145, proxy 85. See below.
+- **Socratic tutor (2026-11-12):** **13 app unit tests** (`TutorTests`) + the `TutorFlowShot` UI run, **InkLabMath 32** (8 new), **43 proxy tests** for `/tutor` + the leak guard. Full suites green: app 48, packages 145, proxy 85. See below.
 
 ### 🎓 Socratic tutor (2026-11-12)
 A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to
@@ -44,8 +44,9 @@ a model.
   in a reply is **checked by the red pen** in context ("You: 2x = 4 ✓ checks out"); a verified step
   replaces the wrong line. Prose is just a message.
 - **On the page (layout A, the margin note):** one note per session in the right margin, level with the
-  line the verdict is about, with a thin connector to that line, placed right of all ink in its band so it
-  **never covers the student's writing** (below the ink if the margin is full). Only the latest tutor
+  line the verdict is about, with a thin connector to that line, placed right of all ink and objects in its
+  band so it **never covers the student's writing or another object** (a widget's controls, a sticky), and
+  below them if the margin is full; it is drawn above every other object. Only the latest tutor
   message shows; earlier hints, the student's replies and the engine's check of each step ("You: 2x = 4
   ✓ checks out") fold into an **"N earlier"** control. One ✕ closes the session; Reply stays on the note.
   The note is ONE journal object: each message replaces its payload (`promote` + resize, one undo step),

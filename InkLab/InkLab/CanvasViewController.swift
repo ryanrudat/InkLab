@@ -835,7 +835,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// The session's margin note: inserted beside the line the verdict is about on the first message, then
     /// updated in place (payload replaced + re-sized, one journal transaction = one undo step) for each
-    /// message after. It stays where the student moved it unless the taller note would now cover ink.
+    /// message after. It stays where the student moved it unless the taller note would now cover ink or
+    /// another object; it never covers either, and it is drawn above every other object.
     private func putTutorNote(_ session: TutorSession, reply: TutorReply, page: UUID) {
         let pageObjects = store.pageProjection(page)
         let existing = TutorLayout.sessions(on: pageObjects).first { $0.latest.provenance.tutor.id == session.id }?.latest
@@ -844,12 +845,13 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let width = TutorNoteStyle.current.width
         let size = CGSize(width: width, height: TutorNoteView.height(for: provenance, width: width))
         let ink = (page == store.pageID ? canvasView.drawing : loadedInk(page)).strokes.map(\.renderBounds)
+        let avoid = TutorLayout.obstacles(ink: ink, page: pageObjects, except: existing?.objectID)
         let placed = TutorLayout.marginFrame(size: size, anchor: session.anchorRect, problem: session.problem,
-                                             ink: ink, canvasWidth: view.bounds.width)
+                                             avoiding: avoid, canvasWidth: view.bounds.width)
         let frame: CGRect
         if let existing, let obj = pageObjects.objects[existing.objectID] {
             let kept = CGRect(origin: existing.frame.origin, size: size)
-            frame = ink.contains(where: { $0.insetBy(dx: -8, dy: -8).intersects(kept) }) ? placed : kept
+            frame = avoid.contains(where: { $0.insetBy(dx: -8, dy: -8).intersects(kept) }) ? placed : kept
             var ops: [OpPayload] = [.promote(objectID: obj.objectID, old: obj.payload, new: payload)]
             let moved = Transform(x: Double(frame.minX), y: Double(frame.minY), width: Double(frame.width),
                                   height: Double(frame.height), rotation: obj.transform.rotation)
@@ -858,7 +860,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         } else {
             frame = placed
             insertObject(kind: .callout, payload: payload, size: size, aiProvenance: provenance.json,
-                         at: CGPoint(x: frame.midX, y: frame.midY), onPage: page)
+                         at: CGPoint(x: frame.midX, y: frame.midY), onPage: page, z: TutorLayout.topZ(on: pageObjects))
         }
         if page == store.pageID {
             canvasView.scrollRectToVisible(frame.insetBy(dx: 0, dy: -24), animated: true)
@@ -1146,7 +1148,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     @discardableResult
     private func insertObject(kind: ObjectKind, payload: ObjectPayload, size: CGSize,
                               aiProvenance: String? = nil, at explicitCenter: CGPoint? = nil,
-                              onPage page: UUID? = nil) -> UUID {
+                              onPage page: UUID? = nil, z: FractionalIndex? = nil) -> UUID {
         let id = UUID()
         let targetPage = page ?? store.pageID
         // Visible center in CONTENT coordinates (the overlay is scrolled with the canvas). When an
@@ -1166,7 +1168,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let t = Transform(x: Double(center.x - size.width / 2),
                           y: Double(center.y - size.height / 2),
                           width: Double(size.width), height: Double(size.height))
-        let snapshot = ObjectSnapshot(objectID: id, kind: kind, transform: t,
+        let snapshot = ObjectSnapshot(objectID: id, kind: kind, transform: t, z: z ?? FractionalIndex("m"),
                                       pageID: targetPage, createdBy: store.notebookID, payload: payload)
         let op: OpPayload = aiProvenance.map { .aiInsert(snapshot: snapshot, provenanceJSON: $0) }
             ?? .addObject(snapshot: snapshot)

@@ -40,8 +40,9 @@ final class TutorFlowShot: XCTestCase {
         return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: p, object: element)], timeout: timeout) == .completed
     }
 
+    /// Launch against the proxy with the AI permission on, in a fresh notebook (no existing one is touched).
     @MainActor
-    func testTutorConversation() throws {
+    private func launchIntoNewNotebook() throws -> XCUIApplication {
         let up = expectation(description: "mock proxy")
         var reachable = false
         URLSession.shared.dataTask(with: URL(string: "\(proxy)/health")!) { _, resp, _ in
@@ -71,6 +72,36 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(covers.firstMatch.waitForExistence(timeout: 5))
         covers.element(boundBy: covers.count - 1).tap()
         XCTAssertTrue(app.buttons["insertMenu"].waitForExistence(timeout: 5))
+
+        return app
+    }
+
+    /// The bug from the theme pass: with a calculator in the middle of the page and the working to its left,
+    /// the note used to land on the calculator's keys (sometimes drawn above it, sometimes below).
+    @MainActor
+    func testNoteNeverCoversAWidget() throws {
+        let app = try launchIntoNewNotebook()
+        app.buttons["insertMenu"].tap()
+        app.buttons["insertCalculator"].tap()
+        let keys = ["7", "4", "1", "divide", "minus"].map { app.buttons[$0] }
+        XCTAssertTrue(keys[0].waitForExistence(timeout: 5))
+        for (i, width) in [180.0, 120.0, 90.0].enumerated() {
+            let y = 640.0 + Double(i) * 50
+            stroke(app, from: CGPoint(x: 60, y: y), to: CGPoint(x: 60 + width, y: y + 6))
+        }
+        app.buttons["insertMenu"].tap()
+        app.buttons["tutor"].tap()
+        let note = app.otherElements["tutorNote"]
+        XCTAssertTrue(note.waitForExistence(timeout: 30))
+        shot("widget-avoided")
+        for key in keys { XCTAssertFalse(note.frame.intersects(key.frame), "the note covers the calculator's \(key.label) key") }
+        let calculator = keys.dropFirst().reduce(keys[0].frame) { $0.union($1.frame) }
+        XCTAssertFalse(note.frame.intersects(calculator), "the note overlaps the calculator: \(note.frame) vs \(calculator)")
+    }
+
+    @MainActor
+    func testTutorConversation() throws {
+        let app = try launchIntoNewNotebook()
 
         // Three lines of "working" (the mock reads them as 2x + 3 = 7 / 2x = 10 / x = 5).
         for (i, width) in [180.0, 120.0, 90.0].enumerated() {
