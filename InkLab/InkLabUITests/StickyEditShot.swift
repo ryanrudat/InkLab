@@ -5,6 +5,7 @@ import XCTest
 final class StickyEditShot: XCTestCase {
     func testEditStickyText() {
         let app = XCUIApplication()
+        app.launchEnvironment["INKLAB_TEST_STORE"] = "1"   // a throwaway library, never the real notebooks
         app.launch()
 
         let firstCover = app.buttons.matching(identifier: "notebookCover").firstMatch

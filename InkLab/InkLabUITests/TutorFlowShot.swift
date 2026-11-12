@@ -53,6 +53,7 @@ final class TutorFlowShot: XCTestCase {
         try XCTSkipUnless(reachable, "Start the mock proxy first: cd Server && npm run mock")
 
         let app = XCUIApplication()
+        app.launchEnvironment["INKLAB_TEST_STORE"] = "1"   // a throwaway library, never the real notebooks
         app.launchEnvironment["INKLAB_PROXY_URL"] = proxy
         app.launch()
 

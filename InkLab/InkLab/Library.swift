@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import Combine
 import InkLabRecognition
 
@@ -36,9 +37,7 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     @Published var notebooks: [Notebook] { didSet { save() } }
 
     private static let storeURL: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let dir = base.appendingPathComponent("InkLab", isDirectory: true)
+        let dir = AppStorageRoot.base.appendingPathComponent("InkLab", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("library.json")
     }()
@@ -142,13 +141,33 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
 
     // MARK: Cloud AI consent (ADR 0002 / App Store §5.1.2(i)) — gates every "@" make-real generation.
 
+    private static let consentKey = "inklab.cloudAIConsent.v1"
+    private static let consentGrantedAtKey = "inklab.cloudAIConsentGrantedAt.v1"
+    private static let userKindKey = "inklab.userKind.v1"
+    private static let ageVerifiedKey = "inklab.ageVerified.v1"
+
     /// The explicit third-party-AI permission. OFF by default — a privacy-policy line is not enough;
-    /// every user must opt in before the first cloud call.
-    @Published var cloudAIConsentGranted: Bool = false
+    /// every user must opt in before the first cloud call. Persisted once given (withdrawn by turning it
+    /// off), with the time it was granted, so the opt-in is a durable record instead of resetting each launch.
+    @Published var cloudAIConsentGranted: Bool {
+        didSet {
+            UserDefaults.standard.set(cloudAIConsentGranted, forKey: Self.consentKey)
+            if cloudAIConsentGranted, !oldValue { UserDefaults.standard.set(Date(), forKey: Self.consentGrantedAtKey) }
+            if !cloudAIConsentGranted { UserDefaults.standard.removeObject(forKey: Self.consentGrantedAtKey) }
+        }
+    }
+    /// When the current opt-in was given (nil when consent is off).
+    var cloudAIConsentGrantedAt: Date? { UserDefaults.standard.object(forKey: Self.consentGrantedAtKey) as? Date }
     /// How the user is classified for consent purposes (set behind a neutral age screen in a full build).
-    @Published var userKind: UserKind = .adult
+    @Published var userKind: UserKind { didSet { UserDefaults.standard.set(userKind.wire, forKey: Self.userKindKey) } }
     /// Verifiable parental-consent / age check, required for minors (ignored for adults).
-    @Published var ageVerified: Bool = false
+    @Published var ageVerified: Bool { didSet { UserDefaults.standard.set(ageVerified, forKey: Self.ageVerifiedKey) } }
+
+    // MARK: Appearance
+
+    private static let appearanceKey = "inklab.appearance.v1"
+    /// Light, dark (the desert at night) or follow the iPad's setting. Persisted.
+    @Published var appearance: AppAppearance { didSet { UserDefaults.standard.set(appearance.rawValue, forKey: Self.appearanceKey) } }
 
     init() {
         // Setting a stored property in init does NOT fire its didSet, so loading the saved value here
@@ -159,6 +178,10 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
         leftHanded = UserDefaults.standard.object(forKey: Self.leftHandedKey) as? Bool ?? false
         fingerDrawing = UserDefaults.standard.object(forKey: Self.fingerDrawingKey) as? Bool ?? true
         autoCommands = UserDefaults.standard.object(forKey: Self.autoCommandsKey) as? Bool ?? true
+        cloudAIConsentGranted = UserDefaults.standard.bool(forKey: Self.consentKey)          // false if never set
+        userKind = UserDefaults.standard.string(forKey: Self.userKindKey).map(UserKind.init(wire:)) ?? .adult
+        ageVerified = UserDefaults.standard.bool(forKey: Self.ageVerifiedKey)
+        appearance = UserDefaults.standard.string(forKey: Self.appearanceKey).flatMap(AppAppearance.init(rawValue:)) ?? .system
     }
 
     /// The consent session sent with each make-real request (the server re-checks it — ADR 0002).
@@ -167,6 +190,32 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
                         userKind: userKind.wire,
                         aiConsentGranted: cloudAIConsentGranted,
                         ageVerified: userKind == .adult ? true : ageVerified)
+    }
+}
+
+/// The app's color scheme choice.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .system: return "Match iPad"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch self {
+        case .system: return .unspecified
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+    /// Set every window of the app to this appearance (`.unspecified` follows the iPad's setting).
+    @MainActor func applyToWindows() {
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows { window.overrideUserInterfaceStyle = interfaceStyle }
+        }
     }
 }
 

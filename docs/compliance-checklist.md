@@ -83,9 +83,9 @@ still current. The cloud path now works end-to-end in development, which raises 
   network or escape its card**, so no student data can be exfiltrated from a widget.
 
 **Still needed before any minor uses the cloud path (unchanged, just current)**
-- **Consent settings are still in-memory and reset every launch.** Only the notebook list +
-  journal/ink persist; the cloud-AI opt-in / `userKind` / `ageVerified` (`AppSettings`) do **not** —
-  persisting consent state durably (and enforcing it server-side at the proxy) is still TODO.
+- ~~Consent settings are still in-memory and reset every launch.~~ **Done 2026-11-12:** the cloud-AI
+  opt-in, `userKind` and `ageVerified` persist (UserDefaults), with the time the opt-in was given;
+  turning it off withdraws it and clears that time. The proxy also re-checks the session on every call.
 - **Verifiable parental-consent flow** (COPPA VPC) — not yet built.
 - **In-app §5.1.2(i) AI-disclosure / permission prompt** — the app currently sends a **hardcoded
   adult/consented/online session**; there is no real age screen, permission prompt, or reachability.
@@ -122,7 +122,7 @@ status are unchanged. One architectural item was meaningfully strengthened this 
   on-device WKWebView CSP remains the real boundary).
 
 **Still outstanding (unchanged)**
-- First-run **§5.1.2(i) AI-disclosure / permission prompt** and **persisting consent state** durably.
+- First-run **§5.1.2(i) AI-disclosure / permission prompt** (consent state now persists, 2026-11-12).
 - **Verifiable parental-consent flow** (COPPA VPC).
 - **Input/output moderation** ("Organizations Serving Minors" safeguards).
 - **ZDR + written data-retention policy.**
@@ -171,11 +171,9 @@ sections are unchanged. One client-side gap from 2026-06-08 has been partially c
   there is no real age screen, permission prompt"* — is now **stale** and superseded by the above.
 
 **Still missing on the client (the gap narrowed, it did not close)**
-- **Consent state still does NOT persist.** `cloudAIConsentGranted`, `userKind`, and `ageVerified` have
-  **no `didSet`/UserDefaults backing** and **reset to defaults every launch** (adult / not consented /
-  not age-verified). Only `defaultPaper` and `snapShapesOnHold` persist. Durable consent persistence is
-  still TODO. (Net effect today is fail-safe — it resets to *unconsented* — but it is not the required
-  durable record.)
+- ~~Consent state still does NOT persist.~~ **Done 2026-11-12:** `cloudAIConsentGranted`, `userKind`
+  and `ageVerified` persist via UserDefaults, and the opt-in records when it was granted
+  (`cloudAIConsentGrantedAt`). Default stays *off* until the user opts in.
 - **No first-run §5.1.2(i) disclosure / permission prompt.** Consent lives in Settings, opt-in and off
   by default, but there is **no forced first-launch disclosure or neutral age screen** before the first
   cloud call — the user must find the toggle. No onboarding/consent sheet exists in the app entry point.

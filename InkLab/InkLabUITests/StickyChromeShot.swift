@@ -5,6 +5,7 @@ import XCTest
 final class StickyChromeShot: XCTestCase {
     func testStickyDeleteChrome() {
         let app = XCUIApplication()
+        app.launchEnvironment["INKLAB_TEST_STORE"] = "1"   // a throwaway library, never the real notebooks
         app.launch()
 
         // Open the first notebook (top-left cover; found by id, since the Home header moves it).

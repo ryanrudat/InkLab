@@ -20,6 +20,7 @@ final class InkLabUITestsLaunchTests: XCTestCase {
     @MainActor
     func testLaunch() throws {
         let app = XCUIApplication()
+        app.launchEnvironment["INKLAB_TEST_STORE"] = "1"   // a throwaway library, never the real notebooks
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,

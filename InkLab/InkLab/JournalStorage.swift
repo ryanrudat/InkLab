@@ -76,8 +76,7 @@ final class FileJournalStorage: JournalStorage {
     }
 
     static func notebookDir(_ notebookID: UUID, root: URL? = nil) -> URL {
-        let base = root ?? (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                            ?? FileManager.default.temporaryDirectory)
+        let base = root ?? AppStorageRoot.base
         return base.appendingPathComponent("InkLab/notebooks/\(notebookID.uuidString)", isDirectory: true)
     }
 
@@ -208,4 +207,19 @@ final class FileJournalStorage: JournalStorage {
         }
     }
     private func inkURL(_ page: UUID) -> URL { inkDir.appendingPathComponent("\(page.uuidString).drawing") }
+}
+
+/// Where the app keeps its library and notebooks: Application Support. A DEBUG build launched with
+/// `INKLAB_TEST_STORE=1` (the UI tests) uses a fresh temporary folder instead, so tests never add notebooks or
+/// objects to the real library.
+enum AppStorageRoot {
+    nonisolated static let base: URL = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["INKLAB_TEST_STORE"] == "1" {
+            return FileManager.default.temporaryDirectory.appendingPathComponent("InkLabUITest-\(UUID().uuidString)", isDirectory: true)
+        }
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+    }()
 }

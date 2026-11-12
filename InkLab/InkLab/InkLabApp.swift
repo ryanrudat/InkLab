@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct InkLabApp: App {
@@ -10,6 +11,9 @@ struct InkLabApp: App {
             HomeView()
                 .environmentObject(library)
                 .environmentObject(settings)
+                // Settings › Appearance. Applied to the window itself (not `.preferredColorScheme`), so the
+                // UIKit canvas and sheets follow too, and "Match iPad" reliably hands control back to the system.
+                .onChange(of: settings.appearance, initial: true) { _, appearance in appearance.applyToWindows() }
         }
     }
 }
