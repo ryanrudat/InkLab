@@ -179,11 +179,10 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             guard let self else { return }
             switch mode {
             case .write: self.openTutorWriteZone(calloutID: id)
-            case .type where self.tutorSession(of: id)?.isUnread == true: self.promptTutorReading(calloutID: id)
-            case .type: self.promptTutorReply(calloutID: id)
-            case .fixReading: self.promptTutorReading(calloutID: id)
+            case .type, .fixReading: self.closeTutorWriteZone()   // the note opens its own drop-down box
             }
         }
+        overlay.onTutorTyped = { [weak self] id, typed in self?.tutorTyped(typed, calloutID: id) }
         store.onPersistenceError = { [weak self] error in self?.reportPersistenceFailure(error) }
 
         lassoLayer.strokeColor = UIColor.systemBlue.cgColor
@@ -238,6 +237,23 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(flushInkNow), name: UIApplication.willResignActiveNotification, object: nil)
         nc.addObserver(self, selector: #selector(flushInkNow), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        nc.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        nc.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    /// Typing on the page (a tutor note's box, a sticky) must never happen under the keyboard: leave room
+    /// to scroll past the page's end while it's up, and scroll just enough to keep the text in view.
+    @objc private func keyboardWillChangeFrame(_ note: Notification) {
+        guard let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+              let screen = view.window?.windowScene?.screen else { return }
+        let keyboard = note.name == UIResponder.keyboardWillHideNotification ? .null : view.convert(end, from: screen.coordinateSpace)
+        let overlap = keyboard.isNull ? 0 : max(0, view.bounds.maxY - keyboard.minY)
+        canvasView.contentInset.bottom = overlap
+        guard overlap > 0, let input = overlay.focusedTextInput else { return }
+        let bottom = input.convert(input.bounds, to: view).maxY + 16
+        if bottom > keyboard.minY {
+            canvasView.setContentOffset(CGPoint(x: canvasView.contentOffset.x, y: canvasView.contentOffset.y + bottom - keyboard.minY), animated: true)
+        }
     }
 
     /// Write the current page's ink synchronously now (app suspending). Object ops already persist immediately.
@@ -780,33 +796,18 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         }
     }
 
-    /// Reply on a tutor callout: type an answer or a question, or just ask for the next hint.
-    private func promptTutorReply(calloutID: UUID) {
-        guard let obj = store.page.objects[calloutID], case .callout(_, _, let json) = obj.payload,
-              let provenance = TutorCalloutProvenance.decode(json) else { return }
-        let sessionID = provenance.tutor.id, page = store.pageID
-        closeTutorWriteZone()
-        let alert = UIAlertController(title: "Reply to the tutor",
-                                      message: "Or tap Write on the page to answer in your own handwriting.",
-                                      preferredStyle: .alert)
-        alert.addTextField { field in
-            field.placeholder = "Your answer or a question"
-            field.autocapitalizationType = .none
-            field.autocorrectionType = .no
-            field.accessibilityIdentifier = "tutorReplyField"
+    /// Sent from a tutor note's drop-down box: a typed reply (or a request for the next hint), or the
+    /// problem typed as it really is — the session starts over from that, unless nothing changed.
+    private func tutorTyped(_ typed: TutorTypedReply, calloutID: UUID) {
+        guard let session = tutorSession(of: calloutID) else { return }
+        let page = store.pageID
+        switch typed {
+        case .reply(let text, let wantsHint):
+            sendTutorReply(sessionID: session.id, text: text, wantsHint: wantsHint, page: page)
+        case .reading(let text):
+            guard TutorSession.steps(from: text) != session.pageLines else { return }
+            restartTutor(session, read: text, page: page)
         }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Another hint", style: .default) { [weak self, weak alert] _ in
-            self?.sendTutorReply(sessionID: sessionID, text: alert?.textFields?.first?.text ?? "", wantsHint: true, page: page)
-        })
-        let send = UIAlertAction(title: "Send", style: .default) { [weak self, weak alert] _ in
-            let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return }
-            self?.sendTutorReply(sessionID: sessionID, text: text, wantsHint: false, page: page)
-        }
-        alert.addAction(send)
-        alert.preferredAction = send
-        present(alert, animated: true)
     }
 
     /// "Write on the page": highlight a free space under the problem and read the next ink written there
@@ -827,43 +828,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         pendingAutoScan?.cancel(); pendingAutoScan = nil
         consumedStrokeCount = canvasView.drawing.strokes.count
         canvasView.scrollRectToVisible(rect.insetBy(dx: -24, dy: -24), animated: true)
-        onStatus?(session.isUnread ? "Write the problem again in the highlighted space — the tutor reads it when you pause."
-                                   : "Write your reply in the highlighted space — the tutor reads it when you pause.")
+        onStatus?(session.isUnread ? "Write the problem again in the highlighted space — \(TutorSession.tutorName) reads it when you pause."
+                                   : "Write your reply in the highlighted space — \(TutorSession.tutorName) reads it when you pause.")
     }
 
     /// The tutor session a note belongs to (its state rides in the note's provenance).
     private func tutorSession(of calloutID: UUID) -> TutorSession? {
         guard let obj = store.page.objects[calloutID], case .callout(_, _, let json) = obj.payload else { return nil }
         return TutorCalloutProvenance.decode(json)?.tutor
-    }
-
-    /// "I read: …" tapped (or Type it, on a problem that couldn't be read): type the problem as it really
-    /// is, prefilled with what was read. The session starts over from it.
-    private func promptTutorReading(calloutID: UUID) {
-        guard let session = tutorSession(of: calloutID) else { return }
-        let page = store.pageID
-        closeTutorWriteZone()
-        let alert = UIAlertController(
-            title: session.isUnread ? "Type the problem" : "Fix what I read",
-            message: session.isUnread ? "Type the problem and your working. Put ; between lines, like 2x + 3 = 7; 2x = 4."
-                                      : "Change anything I misread. Put ; between lines. The tutor starts again from what you type.",
-            preferredStyle: .alert)
-        alert.addTextField { field in
-            field.text = session.pageLines.joined(separator: "; ")
-            field.placeholder = "2x + 3 = 7; 2x = 4"
-            field.autocapitalizationType = .none
-            field.autocorrectionType = .no
-            field.accessibilityIdentifier = "tutorReadingField"
-        }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        let start = UIAlertAction(title: "Start", style: .default) { [weak self, weak alert] _ in
-            let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty, TutorSession.steps(from: text) != session.pageLines else { return }
-            self?.restartTutor(session, read: text, page: page)
-        }
-        alert.addAction(start)
-        alert.preferredAction = start
-        present(alert, animated: true)
     }
 
     /// Start `old`'s conversation over on a new reading (typed, corrected or re-read): same note, fresh
@@ -877,7 +849,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         case .failure(let error):
             onStatus?(error.message)
         case .success(let fresh):
-            guard !tutorBusy.contains(fresh.id) else { onStatus?("The tutor is still answering — try again in a moment."); return }
+            guard !tutorBusy.contains(fresh.id) else { onStatus?("\(TutorSession.tutorName) is still answering — try again in a moment."); return }
             pendingTutorReplies[fresh.id] = nil          // replies to the old reading don't apply any more
             tutorBusy.insert(fresh.id)
             startTrackedTask { [weak self] in await self?.requestTutorMessage(fresh, page: page) }
@@ -924,7 +896,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         if let reason = makeRealSession.tutorBlockReason { onStatus?(reason); return }
         guard !tutorBusy.contains(sessionID) else {
             pendingTutorReplies[sessionID, default: []].append((text: text, wantsHint: wantsHint, page: page))
-            onStatus?("The tutor is still answering — your reply is next.")
+            onStatus?("\(TutorSession.tutorName) is still answering — your reply is next.")
             return
         }
         guard let current = TutorLayout.sessions(on: store.pageProjection(page))
@@ -951,7 +923,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             tutorBusy.remove(session.id)
             drainTutorReplies(session.id)
         }
-        onStatus?("The tutor is thinking…")
+        onStatus?("\(TutorSession.tutorName) is thinking…")
         do {
             let reply = try await Tutor.nextMessage(for: session, consent: makeRealSession)
             guard !Task.isCancelled, !isDismissing else { return }

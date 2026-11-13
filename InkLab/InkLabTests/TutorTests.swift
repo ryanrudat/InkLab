@@ -247,6 +247,9 @@ struct TutorTests {
         #expect(note.isExpanded && note.fittingHeight(width: 280) > collapsed)
         let rows = note.subviews.compactMap { $0 as? UILabel }.filter { $0.accessibilityIdentifier == "tutorThread" && !$0.isHidden }
         #expect(rows.contains { $0.attributedText?.string == "You: 2x = 4  ✓ checks out" })
+        // Pip's earlier messages carry Pip's name and color; the latest one is in Pip's color too.
+        #expect(rows.contains { $0.text == "Pip: Look at line 2: what did you do?" && $0.textColor == Theme.pip })
+        #expect(label("tutorMessage")?.textColor == Theme.pip)
         #expect(collapsed >= first)   // one control taller than the first message's note, not one card per message
     }
 
@@ -282,7 +285,7 @@ struct TutorTests {
         note.configure(TutorCalloutProvenance(tutor: unread, turn: 1))
         func view<T: UIView>(_ id: String) -> T? { note.subviews.first { $0.accessibilityIdentifier == id } as? T }
         #expect((view("tutorMessage") as UILabel?)?.text == TutorSession.unreadMessage)
-        #expect((view("tutorHeader") as UILabel?)?.text == "Tutor")
+        #expect((view("tutorHeader") as UILabel?)?.text == "Pip")
         #expect((view("tutorReadAs") as UIButton?)?.isHidden == true)
         #expect((view("tutorReplyWrite") as UIButton?)?.configuration?.title == "Rewrite it")
         #expect((view("tutorReplyType") as UIButton?)?.configuration?.title == "Type it")
@@ -291,11 +294,55 @@ struct TutorTests {
         #expect(started.id == unread.id && !started.isUnread && started.pageLines.count == 2)
     }
 
+    @Test func typingDropsABoxDownInsideTheNote() throws {
+        var s = session("7+3=")
+        s.thread.append(TutorTurn(role: .tutor, text: "Can you start at 7 and count up 3 more?"))
+        let note = TutorNoteView(frame: CGRect(x: 0, y: 0, width: 280, height: 10))
+        note.configure(TutorCalloutProvenance(tutor: s, turn: 1))
+        var sent: [TutorTypedReply] = []
+        note.onTyped = { sent.append($0) }
+        func view<T: UIView>(_ id: String) -> T? { note.subviews.first { $0.accessibilityIdentifier == id } as? T }
+        let closed = note.fittingHeight(width: 280)
+        #expect((view("tutorReplyField") as UITextField?)?.isHidden == true)
+
+        // Type: the note grows a box (and "Another hint") — the note itself, not a popup.
+        let type = try #require(view("tutorReplyType") as UIButton?)
+        type.sendActions(for: .touchUpInside)
+        #expect(note.typing == .type && note.fittingHeight(width: 280) > closed)
+        note.frame.size.height = note.fittingHeight(width: 280)
+        note.layoutIfNeeded()
+        let field = try #require(view("tutorReplyField") as UITextField?)
+        #expect(!field.isHidden && (field.text ?? "").isEmpty)
+        #expect(note.controlHit(CGPoint(x: field.frame.midX, y: field.frame.midY)) === field)
+        let hint = try #require(view("tutorTypeHint") as UIButton?)
+        hint.sendActions(for: .touchUpInside)
+        #expect(sent == [.reply("", wantsHint: true)] && note.typing == nil)
+        #expect(note.fittingHeight(width: 280) == closed)
+
+        // Return sends what was typed; an empty box sends nothing.
+        type.sendActions(for: .touchUpInside)
+        _ = note.textFieldShouldReturn(field)
+        #expect(sent.count == 1 && note.typing == .type)
+        field.text = " so 10? "
+        _ = note.textFieldShouldReturn(field)
+        #expect(sent.last == .reply("so 10?", wantsHint: false) && note.typing == nil)
+
+        // "I read": the same box, starting from what was read, sends the problem itself.
+        let readAs = try #require(view("tutorReadAs") as UIButton?)
+        readAs.sendActions(for: .touchUpInside)
+        let reading = try #require(view("tutorReadingField") as UITextField?)
+        #expect(note.typing == .fixReading && reading.text == "7+3=")
+        #expect((view("tutorTypeHint") as UIButton?)?.isHidden == true)
+        reading.text = "1+3="
+        (view("tutorTypeSend") as UIButton?)?.sendActions(for: .touchUpInside)
+        #expect(sent.last == .reading("1+3=") && note.typing == nil)
+    }
+
     @Test func theHeaderStopsCountingHintsOnceTheWorkingChecksOut() {
         let wrong = session("2x + 3 = 7\n2x = 10")
-        #expect(TutorNoteView.headerText(wrong) == "Tutor · hint 1 of 4")
+        #expect(TutorNoteView.headerText(wrong) == "Pip · hint 1 of 4")
         let finished = session("1+3=").addingStudentReply("4", wantsHint: false)
-        #expect(TutorNoteView.headerText(finished) == "Tutor · your working checks out")
+        #expect(TutorNoteView.headerText(finished) == "Pip · your working checks out")
     }
 
     /// The journal is the source of truth: a session is ONE note object; each message replaces its payload

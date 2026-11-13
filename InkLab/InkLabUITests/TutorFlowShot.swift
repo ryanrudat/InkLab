@@ -172,16 +172,21 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(fixRow.exists && fixRow.label.contains("checks out"), "the engine's check isn't in the thread")
         XCTAssertFalse(zone.exists, "the write-here space should close once the reply is read")
         // The working checks out now, so the header stops counting hints.
-        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Tutor · your working checks out")
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Pip · your working checks out")
         shot("2-written-fix-thread-expanded")
         earlier.tap()   // fold it again
         XCTAssertTrue(waitLabel(earlier, timeout: 5) { $0.contains("2 earlier") })
 
-        // Type → Another hint (the ladder climbs only because the student asked).
+        // Type → Another hint (the ladder climbs only because the student asked). Typing drops a box down
+        // inside the note: no popup.
         app.buttons["tutorReplyType"].tap()
-        if !app.alerts.firstMatch.waitForExistence(timeout: 5) { debugDump(app, "after-reply-tap") }
-        XCTAssertTrue(app.alerts.buttons["Another hint"].waitForExistence(timeout: 5))
-        app.alerts.buttons["Another hint"].tap()
+        let hint = app.buttons["tutorTypeHint"]
+        if !hint.waitForExistence(timeout: 5) { debugDump(app, "after-reply-tap") }
+        XCTAssertTrue(hint.exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists, "typing a reply shouldn't open a popup")
+        shot("2b-type-box-open")
+        hint.tap()
+        XCTAssertTrue(hint.waitForNonExistence(timeout: 5), "the box should fold away once something is sent")
         XCTAssertTrue(waitLabel(app.buttons["tutorEarlier"]) { $0.contains("4 earlier") })
         XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("checks out"))
         let second = message.label
@@ -189,10 +194,9 @@ final class TutorFlowShot: XCTestCase {
 
         // A typed QUESTION: checked by the engine but not added to the working, and no ladder reset.
         app.buttons["tutorReplyType"].tap()
-        let field = app.alerts.textFields["tutorReplyField"]
+        let field = app.textFields["tutorReplyField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.typeText("so is x = 2?")
-        app.alerts.buttons["Send"].tap()
+        field.typeText("so is x = 2?\n")          // Return sends
         XCTAssertTrue(waitLabel(app.buttons["tutorEarlier"]) { $0.contains("6 earlier") })
         XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("checks out"))
         shot("4-typed-question")
@@ -228,12 +232,12 @@ final class TutorFlowShot: XCTestCase {
         shot("read-1-misread")
 
         readAs.tap()
-        let field = app.alerts.textFields["tutorReadingField"]
+        let field = app.textFields["tutorReadingField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.alerts.firstMatch.exists, "fixing the reading shouldn't open a popup")
         XCTAssertEqual(field.value as? String, "7+3=", "the correction should start from what was read")
-        field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "1+3=")
-        app.alerts.buttons["Start"].tap()
+        app.buttons["tutorTypeSend"].tap()
         XCTAssertTrue(waitLabel(readAs) { $0 == "I read: 1+3=" }, "the session didn't restart from the corrected reading")
         XCTAssertTrue(waitLabel(message) { $0 != misread && !$0.lowercased().contains("fix") })
         XCTAssertTrue(app.staticTexts["tutorHeader"].label.contains("hint 1 of 4"))
@@ -263,7 +267,7 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(message.waitForExistence(timeout: 30), "no note for an unreadable problem")
         if !message.label.contains("couldn't read") { debugDump(app, "unread-note") }
         XCTAssertTrue(message.label.contains("couldn't read"), message.label)
-        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Tutor")
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Pip")
         XCTAssertFalse(app.buttons["tutorReadAs"].exists)
         XCTAssertEqual(app.buttons["tutorReplyWrite"].label, "Rewrite it")
         XCTAssertEqual(app.buttons["tutorReplyType"].label, "Type it")
@@ -271,12 +275,13 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertFalse(note.waitForNonExistence(timeout: 4), "the note must stay until they act")
         shot("unread-1-note")
 
-        // Type it: the same alert as fixing a reading, empty this time.
+        // Type it: the same box as fixing a reading, empty this time. Tapping Type it again folds it away.
         app.buttons["tutorReplyType"].tap()
-        let field = app.alerts.textFields["tutorReadingField"]
+        let field = app.textFields["tutorReadingField"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         XCTAssertEqual(field.value as? String ?? "", field.placeholderValue ?? "", "nothing was read, so nothing to prefill")
-        app.alerts.buttons["Cancel"].tap()
+        app.buttons["tutorReplyType"].tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
 
         // Rewrite it: written again in the highlighted space, it's read and the session starts.
         setMockReading("1+3=")

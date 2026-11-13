@@ -21,6 +21,7 @@ final class ObjectOverlayView: UIView {
     var annotationProvider: ((UUID) -> Data?)?
     /// The user chose how to reply on a tutor note: write on the page, or type.
     var onTutorReply: ((UUID, TutorReplyMode) -> Void)?
+    var onTutorTyped: ((UUID, TutorTypedReply) -> Void)?
 
     private var hosts: [UUID: ObjectHostView] = [:]
     private var scanView: UIView?
@@ -124,6 +125,16 @@ final class ObjectOverlayView: UIView {
 
     func hideScan() { scanView?.removeFromSuperview(); scanView = nil }
 
+    /// What's being typed into on the page right now, if anything (a tutor note's box, a sticky).
+    var focusedTextInput: UIView? {
+        func find(_ v: UIView) -> UIView? {
+            if v.isFirstResponder { return v }
+            for sub in v.subviews { if let f = find(sub) { return f } }
+            return nil
+        }
+        return find(self)
+    }
+
     /// Feed recognized text into a widget's primary input (handwrite → plot).
     func setWidgetInput(_ id: UUID, _ text: String) {
         prioritizeWebWidget(id)
@@ -164,6 +175,7 @@ final class ObjectOverlayView: UIView {
                 host.onAnnotationChanged = { [weak self] id, data in self?.onAnnotationChanged?(id, data) }
                 host.onWebWidgetInteraction = { [weak self] id in self?.prioritizeWebWidget(id) }
                 host.onTutorReply = { [weak self] id, mode in self?.onTutorReply?(id, mode) }
+                host.onTutorTyped = { [weak self] id, typed in self?.onTutorTyped?(id, typed) }
                 addSubview(host)
                 hosts[snapshot.objectID] = host
                 host.setPencilErasesAnnotation(pencilErasesAnnotations)        // honor the live Eraser-tool state
@@ -300,6 +312,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     var onAnnotationChanged: ((UUID, Data?) -> Void)?       // persist the per-widget annotation strokes
     var onWebWidgetInteraction: ((UUID) -> Void)?           // promote/touch the generated-widget LRU
     var onTutorReply: ((UUID, TutorReplyMode) -> Void)?     // a tutor note's Write / Type
+    var onTutorTyped: ((UUID, TutorTypedReply) -> Void)?    // sent from a tutor note's drop-down box
 
     private static let minWidth: CGFloat = 120
     private static let minHeight: CGFloat = 90
@@ -626,6 +639,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
         } else if kind == "tutor" {
             let note = TutorNoteView()
             note.onReply = { [weak self] mode in guard let self else { return }; self.onTutorReply?(self.objectID, mode) }
+            note.onTyped = { [weak self] typed in guard let self else { return }; self.onTutorTyped?(self.objectID, typed) }
             note.onResize = { [weak self] in self?.fitTutorNote() }
             tutorNote = note
             addSubview(note)

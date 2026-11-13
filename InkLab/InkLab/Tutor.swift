@@ -138,6 +138,9 @@ struct TutorSession: Codable, Sendable, Equatable {
     /// Nothing could be read from the page: the note says so and offers to rewrite or type the problem.
     /// No verdict and nothing for the proxy; the next reading (or typed problem) starts the session.
     var isUnread: Bool { pageLines.isEmpty }
+    /// The tutor's name: on its notes ("Pip · hint 1 of 4"), beside its earlier messages, and in what the
+    /// app says about it while you work with it.
+    static let tutorName = "Pip"
     static let unreadMessage = "I couldn't read your working. Can you write it again a little larger, or type it?"
 
     static func unread(problem: CGRect) -> TutorSession {

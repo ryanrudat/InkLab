@@ -20,6 +20,8 @@ struct TutorNoteStyle {
     var headerColor: UIColor = Theme.sun
     var bodyFont: UIFont = Theme.ui(15)
     var bodyColor: UIColor = Theme.ink
+    /// What Pip says (the latest message, and its earlier ones in the thread).
+    var tutorColor: UIColor = Theme.pip
     var threadFont: UIFont = Theme.ui(13)
     var threadColor: UIColor = Theme.inkSecondary
     var studentColor: UIColor = Theme.ink
@@ -42,6 +44,11 @@ struct TutorNoteStyle {
     var writeZoneHeight: CGFloat = 110
     var writeZoneDash: [NSNumber] = [6, 4]
 
+    /// "Type": the box that drops down inside the note.
+    var fieldBackground: UIColor = Theme.paper
+    var fieldHeight: CGFloat = 36
+    var fieldCornerRadius: CGFloat = 9
+
     static var current = TutorNoteStyle()
 }
 
@@ -49,19 +56,32 @@ struct TutorNoteStyle {
 /// On a note for a problem that couldn't be read, `write` / `type` rewrite or type the problem itself.
 enum TutorReplyMode: Equatable { case write, type, fixReading }
 
+/// Typed into the note's drop-down box: a reply (or just "another hint"), or the problem as it really is.
+enum TutorTypedReply: Equatable {
+    case reply(String, wantsHint: Bool)
+    case reading(String)
+}
+
 /// The tutor's note in the page margin: the latest tutor message, with everything before it (earlier
 /// hints, the student's replies and the engine's check of each step) folded into an "N earlier" control,
 /// the two ways to reply (write on the page, or type), and a thin connector to the line it is about.
-/// Rendered from the session in the note's provenance — the note holds no state of its own beyond
-/// whether the thread is expanded.
-final class TutorNoteView: UIView {
+/// Typing happens in a box that drops down inside the note, not in a popup. Rendered from the session in
+/// the note's provenance — the note holds no state of its own beyond whether the thread is expanded and
+/// whether the box is open.
+final class TutorNoteView: UIView, UITextFieldDelegate {
+    /// A way to reply was chosen (Write on the page; Type and "I read" also open the note's own box).
     var onReply: ((TutorReplyMode) -> Void)?
+    /// Something was sent from the drop-down box.
+    var onTyped: ((TutorTypedReply) -> Void)?
     /// Expanding/collapsing changes the note's height: the host re-fits itself.
     var onResize: (() -> Void)?
     /// The anchored line's right end, in this view's coordinates (set by the host; nil = no connector).
     var anchorInSelf: CGPoint? { didSet { updateConnector() } }
 
     private(set) var isExpanded = false
+    /// The drop-down box (nil = closed): `.type` for a reply, `.fixReading` for the problem itself
+    /// (correcting what was read, or typing a problem that couldn't be read).
+    private(set) var typing: TutorReplyMode?
     private var style: TutorNoteStyle { .current }
     private var provenance: TutorCalloutProvenance?
 
@@ -73,6 +93,10 @@ final class TutorNoteView: UIView {
     private let message = UILabel()
     private let writeButton = UIButton(type: .system)
     private let typeButton = UIButton(type: .system)
+    private let typingCaption = UILabel()
+    private let field = UITextField()
+    private let sendButton = UIButton(type: .system)
+    private let hintButton = UIButton(type: .system)
     private let connector = CAShapeLayer()
     private let anchorDot = CAShapeLayer()
 
@@ -86,18 +110,37 @@ final class TutorNoteView: UIView {
         readAsButton.contentHorizontalAlignment = .leading
         readAsButton.titleLabel?.numberOfLines = 2
         readAsButton.titleLabel?.lineBreakMode = .byTruncatingTail
-        readAsButton.addAction(UIAction { [weak self] _ in self?.onReply?(.fixReading) }, for: .touchUpInside)
+        readAsButton.addAction(UIAction { [weak self] _ in self?.toggleTyping(.fixReading) }, for: .touchUpInside)
         addSubview(readAsButton)
         earlierButton.accessibilityIdentifier = "tutorEarlier"
         earlierButton.contentHorizontalAlignment = .leading
         earlierButton.addAction(UIAction { [weak self] _ in self?.toggleEarlier() }, for: .touchUpInside)
         addSubview(earlierButton)
-        for (button, id, mode) in [(writeButton, "tutorReplyWrite", TutorReplyMode.write), (typeButton, "tutorReplyType", .type)] {
+        for (button, id) in [(writeButton, "tutorReplyWrite"), (typeButton, "tutorReplyType")] {
             button.accessibilityIdentifier = id
             button.contentHorizontalAlignment = .leading
-            button.addAction(UIAction { [weak self] _ in self?.onReply?(mode) }, for: .touchUpInside)
             addSubview(button)
         }
+        writeButton.addAction(UIAction { [weak self] _ in self?.setTyping(nil); self?.onReply?(.write) }, for: .touchUpInside)
+        // On a note that couldn't read its problem, Type it types the problem itself.
+        typeButton.addAction(UIAction { [weak self] _ in
+            self?.toggleTyping(self?.provenance?.tutor.isUnread == true ? .fixReading : .type)
+        }, for: .touchUpInside)
+
+        typingCaption.numberOfLines = 0
+        typingCaption.accessibilityIdentifier = "tutorTypeCaption"
+        field.delegate = self
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.spellCheckingType = .no
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 1))
+        field.leftViewMode = .always
+        sendButton.accessibilityIdentifier = "tutorTypeSend"
+        sendButton.addAction(UIAction { [weak self] _ in self?.submit(wantsHint: false) }, for: .touchUpInside)
+        hintButton.accessibilityIdentifier = "tutorTypeHint"
+        hintButton.contentHorizontalAlignment = .leading
+        hintButton.addAction(UIAction { [weak self] _ in self?.submit(wantsHint: true) }, for: .touchUpInside)
+        for v in [typingCaption, field, sendButton, hintButton] as [UIView] { v.isHidden = true; addSubview(v) }
         layer.insertSublayer(connector, at: 0)
         layer.addSublayer(anchorDot)
         applyStyle()
@@ -114,7 +157,7 @@ final class TutorNoteView: UIView {
         layer.shadowRadius = s.shadowRadius
         layer.shadowOffset = CGSize(width: 0, height: 1)
         header.font = s.headerFont; header.textColor = s.headerColor
-        message.font = s.bodyFont; message.textColor = s.bodyColor
+        message.font = s.bodyFont; message.textColor = s.tutorColor
         connector.strokeColor = s.connectorColor.cgColor
         connector.fillColor = nil
         connector.lineWidth = s.connectorWidth
@@ -133,6 +176,30 @@ final class TutorNoteView: UIView {
             }
             button.configuration = c
         }
+
+        field.font = s.bodyFont
+        field.textColor = s.bodyColor
+        field.tintColor = s.controlTint
+        field.backgroundColor = s.fieldBackground
+        field.layer.cornerRadius = s.fieldCornerRadius
+        field.layer.borderWidth = 1
+        field.layer.borderColor = s.border.cgColor
+        typingCaption.font = s.threadFont
+        typingCaption.textColor = s.threadColor
+        sendButton.setImage(UIImage(systemName: "arrow.up.circle.fill",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 26, weight: .semibold)), for: .normal)
+        sendButton.tintColor = s.controlTint
+        var hint = UIButton.Configuration.plain()
+        hint.title = "Another hint"
+        hint.image = UIImage(systemName: "lightbulb", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
+        hint.imagePadding = 4
+        hint.contentInsets = .zero
+        hint.baseForegroundColor = s.controlTint
+        hint.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { [font = s.controlFont] in
+            var a = $0; a.font = font; return a
+        }
+        hintButton.configuration = hint
+        configureTyping()
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
@@ -150,6 +217,11 @@ final class TutorNoteView: UIView {
     private var earlier: [TutorTurn] { latestIndex.map { Array(thread[..<$0]) } ?? thread }
 
     func configure(_ p: TutorCalloutProvenance) {
+        // A box opened for the old reading doesn't apply once the problem has been read again.
+        if let old = provenance, typing != nil, old.tutor.id != p.tutor.id || old.tutor.readAs != p.tutor.readAs {
+            typing = nil
+            field.resignFirstResponder()
+        }
         provenance = p
         header.text = Self.headerText(p.tutor)
         message.text = latestIndex.map { thread[$0].text } ?? ""
@@ -163,12 +235,13 @@ final class TutorNoteView: UIView {
         setNeedsLayout()
     }
 
-    /// "Tutor · hint 2 of 4" while there's something to find; once the working checks out the hint count
+    /// "Pip · hint 2 of 4" while there's something to find; once the working checks out the hint count
     /// means nothing, and a problem that couldn't be read has no hints yet.
     static func headerText(_ session: TutorSession) -> String {
-        if session.isUnread { return "Tutor" }
-        if case .allValid(_) = session.verdict { return "Tutor · your working checks out" }
-        return "Tutor · hint \(session.rung) of \(TutorSession.maxRung)"
+        let name = TutorSession.tutorName
+        if session.isUnread { return name }
+        if case .allValid(_) = session.verdict { return "\(name) · your working checks out" }
+        return "\(name) · hint \(session.rung) of \(TutorSession.maxRung)"
     }
 
     private func configureReadAs() {
@@ -178,7 +251,7 @@ final class TutorNoteView: UIView {
         title.append(NSAttributedString(string: "  ✎", attributes: [.font: s.threadFont, .foregroundColor: s.controlTint]))
         readAsButton.setAttributedTitle(title, for: .normal)
         readAsButton.accessibilityLabel = "I read: \(read)"
-        readAsButton.accessibilityHint = "Correct what the tutor read"
+        readAsButton.accessibilityHint = "Correct what \(TutorSession.tutorName) read"
     }
 
     private func makeThreadLabel(_ turn: TutorTurn) -> UILabel {
@@ -196,8 +269,8 @@ final class TutorNoteView: UIView {
             label.attributedText = text
         } else {
             label.font = s.threadFont
-            label.textColor = s.threadColor
-            label.text = turn.text
+            label.textColor = s.tutorColor
+            label.text = "\(TutorSession.tutorName): \(turn.text)"
         }
         label.isHidden = !isExpanded
         return label
@@ -225,6 +298,73 @@ final class TutorNoteView: UIView {
         configureEarlierButton()
         onResize?()
         setNeedsLayout()
+    }
+
+    // MARK: Typing
+
+    /// Type (or "I read") tapped: open the box, or close it if it's already open for the same thing.
+    private func toggleTyping(_ mode: TutorReplyMode) {
+        if typing == mode { setTyping(nil); return }
+        onReply?(mode)          // the host closes a "write on the page" space, if one is open
+        setTyping(mode)
+    }
+
+    /// Open the drop-down box for `mode` (nil closes it). A correction starts from what was read; a
+    /// reply starts empty. The note grows to fit, and the box takes the keyboard.
+    func setTyping(_ mode: TutorReplyMode?) {
+        let next = mode == .write ? nil : mode
+        guard next != typing else { return }
+        typing = next
+        field.text = next == .fixReading ? (provenance?.tutor.pageLines.joined(separator: "; ") ?? "") : ""
+        configureTyping()
+        onResize?()
+        setNeedsLayout()
+        superview?.layoutIfNeeded()
+        if next != nil { field.becomeFirstResponder() } else if field.isFirstResponder { field.resignFirstResponder() }
+    }
+
+    private func configureTyping() {
+        let s = style, unread = provenance?.tutor.isUnread == true
+        let caption: String, placeholder: String
+        switch typing {
+        case .fixReading:
+            caption = unread ? "Type the problem and your working. Put ; between lines."
+                             : "Fix anything I misread. Put ; between lines, and I'll start again from it."
+            placeholder = "2x + 3 = 7; 2x = 4"
+            field.accessibilityIdentifier = "tutorReadingField"
+            field.returnKeyType = .go
+            sendButton.accessibilityLabel = "Start"
+        default:
+            caption = ""
+            placeholder = "Your answer or a question"
+            field.accessibilityIdentifier = "tutorReplyField"
+            field.returnKeyType = .send
+            sendButton.accessibilityLabel = "Send"
+        }
+        typingCaption.text = caption
+        field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [.foregroundColor: s.threadColor])
+        field.isHidden = typing == nil
+        sendButton.isHidden = typing == nil
+        typingCaption.isHidden = typing == nil || caption.isEmpty
+        hintButton.isHidden = typing != .type
+    }
+
+    private func submit(wantsHint: Bool) {
+        guard let mode = typing else { return }
+        let text = (field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if mode == .type {
+            guard wantsHint || !text.isEmpty else { return }
+            onTyped?(.reply(text, wantsHint: wantsHint))
+        } else {
+            guard !text.isEmpty else { return }
+            onTyped?(.reading(text))
+        }
+        setTyping(nil)
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        submit(wantsHint: false)
+        return false
     }
 
     // MARK: Layout
@@ -273,6 +413,20 @@ final class TutorNoteView: UIView {
             typeButton.frame = CGRect(x: s.padding + writeWidth + 16, y: y, width: max(0, inner - writeWidth - 16), height: 24)
         }
         y += 24 + s.spacing
+        // The drop-down box: a line saying what to type (for a correction), the box with its send button,
+        // and "Another hint" under a reply.
+        if typing != nil {
+            if !typingCaption.isHidden { place(typingCaption, height: fit(typingCaption, inner)) }
+            let send: CGFloat = 34
+            if apply {
+                field.frame = CGRect(x: s.padding, y: y, width: max(0, inner - send - 6), height: s.fieldHeight)
+                sendButton.frame = CGRect(x: s.padding + inner - send, y: y + (s.fieldHeight - send) / 2, width: send, height: send)
+            }
+            y += s.fieldHeight + s.spacing
+            if !hintButton.isHidden {
+                place(hintButton, height: 22, width: min(inner, ceil(hintButton.sizeThatFits(CGSize(width: inner, height: 22)).width)))
+            }
+        }
         return ceil(y - s.spacing + s.padding)
     }
 
@@ -300,7 +454,8 @@ final class TutorNoteView: UIView {
 
     /// A tappable control at `point` (so the canvas can let it through while the lasso tool is active).
     func controlHit(_ point: CGPoint) -> UIView? {
-        [writeButton, typeButton, readAsButton, earlierButton].first { !$0.isHidden && $0.frame.contains(point) }
+        [writeButton, typeButton, readAsButton, earlierButton, field, sendButton, hintButton]
+            .first { !$0.isHidden && $0.frame.contains(point) }
     }
 }
 
@@ -313,8 +468,8 @@ final class TutorWriteZoneView: UIView {
     private let cancel = UIButton(type: .system)
     private var style: TutorNoteStyle { .current }
 
-    static let replyCaption = "Write your reply here. The tutor reads it when you pause."
-    static let rewriteCaption = "Write the problem again here, a little larger. The tutor reads it when you pause."
+    static let replyCaption = "Write your reply here. \(TutorSession.tutorName) reads it when you pause."
+    static let rewriteCaption = "Write the problem again here, a little larger. \(TutorSession.tutorName) reads it when you pause."
 
     init(frame: CGRect, caption text: String = TutorWriteZoneView.replyCaption) {
         super.init(frame: frame)

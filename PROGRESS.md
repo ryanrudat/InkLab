@@ -55,27 +55,32 @@ a model.
 - **Finished is not fixed (fix from a live run):** a reply that finishes an unfinished line ("1+3=" then
   "4") is described to the model as finishing it, not correcting it ("Nothing was wrong with that line"),
   and the prompt says to acknowledge it as "1 + 3 = 4 checks out". With only finished lines, a draft that
-  says "fix" or "correction" is rejected. Once the working checks out, the note's header says "Tutor ·
+  says "fix" or "correction" is rejected. Once the working checks out, the note's header says "Pip ·
   your working checks out" instead of counting hints.
 - **What was read (fix from a live run):** a hooked "1" read as "7+3=" got coached as 7 + 3, with no way
   to tell. The note now starts with a quiet **"I read: 7+3= ✎"** line (all lines, "·" between them, at
-  most two lines then "…"). Tapping it opens the typed-reply style alert prefilled with the reading; the
+  most two lines then "…"). Tapping it drops the note's typing box down, prefilled with the reading; the
   corrected problem **starts the session over** in the same note (`TutorSession.restarted`: same id, fresh
   verdict, no corrections, empty thread, hint 1), and one undo goes back to the old reading.
 - **Unreadable problems (fix from a live run):** nothing read used to be a 2.8 s toast. Now the margin
   note goes up at the problem saying it couldn't read it, and stays until the student acts or closes it:
   **Rewrite it** highlights a space (ink written there, or by the problem, is read again after a pause;
-  written over the old ink, the two are read together) and **Type it** opens the same alert, empty. The
+  written over the old ink, the two are read together) and **Type it** opens the same box, empty. The
   first reading that works starts the session in that same note, which moves beside the rewritten
   problem. Tapping Tutor again on the same problem reuses the note too. Nothing is sent to `/tutor` while
   nothing has been read.
 - **Replies:** the note offers both. **Write on the page** highlights a free space under the problem
   (switching to the pen if needed); after a pause the auto-scan reads the ink written there as the reply
   and the highlight goes away (✕ on it cancels). Writing anywhere else near the problem still counts too,
-  as before (consent-gated, works even with auto-"@" off). **Type** opens a text field (Send / Another
-  hint). Any math
+  as before (consent-gated, works even with auto-"@" off). **Type** drops a box down inside the note
+  (no popup): Return or the ↑ sends, **Another hint** asks for the next rung, tapping Type again folds it
+  away; if the on-screen keyboard would cover it, the page scrolls it into view. Any math
   in a reply is **checked by the red pen** in context ("You: 2x = 4 ✓ checks out"); a verified step
   replaces the wrong line. Prose is just a message.
+- **Pip:** the tutor has a name. The note's header reads "Pip · hint 1 of 4", Pip's earlier messages in
+  the thread read "Pip: …", and status lines say "Pip is thinking…". What Pip says is in its own color,
+  atomic-age turquoise (`Theme.pip`, 5.3:1 on the light note, 8:1 on the dark one), so it never reads
+  like the student's writing or the orange chrome. One constant (`TutorSession.tutorName`) holds the name.
 - **On the page (layout A, the margin note):** one note per session in the right margin, level with the
   line the verdict is about, with a thin connector to that line, placed right of all ink and objects in its
   band so it **never covers the student's writing or another object** (a widget's controls, a sticky), and

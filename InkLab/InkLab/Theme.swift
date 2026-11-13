@@ -45,6 +45,9 @@ enum Theme {
     static let sage = dynamic(0x4E8A5E, 0x8FC79E)
     /// A cool steel tint: engine-result callouts (exact computation).
     static let steelTint = dynamic(0xE8ECF0, 0x263044)
+    /// Pip's voice (the tutor's words): atomic-age turquoise, so what Pip says never reads like your own
+    /// writing or the orange chrome around it.
+    static let pip = dynamic(0x1F6E75, 0x7ED3CE)
     /// A warm sand tint: the tutor's note.
     static let sandTint = dynamic(0xFDF1E4, 0x2B2B39)
 
