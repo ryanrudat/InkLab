@@ -88,6 +88,11 @@ struct InkLabTests {
         #expect(CanvasViewController.extractAtCommands("notes @balance H2 @molar C6") == ["@balance H2", "@molar C6"])
         #expect(CanvasViewController.extractAtCommands("@a @b").count == 2)
         #expect(CanvasViewController.extractAtCommands("just plain notes").isEmpty)
+        // An "@" inside a word (an email address in someone's notes) is never a command, and doesn't cut
+        // a real command short either.
+        #expect(CanvasViewController.extractAtCommands("email me at sam@school.org").isEmpty)
+        #expect(CanvasViewController.extractAtCommands("@a clock for sam@home") == ["@a clock for sam@home"])
+        #expect(CanvasViewController.extractAtCommands("(@units 5 km to mi)") == ["@units 5 km to mi)"])
     }
 
     /// Regression: `@molar` is NOT one of InkLabRouter's verbs, so it used to fall through to

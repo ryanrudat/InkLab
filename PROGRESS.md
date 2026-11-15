@@ -13,6 +13,18 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
   Updated the same day (unfinished lines, Write/Type replies, the dock button): **app 54, packages 149 (InkLabMath 36), proxy 95**.
   Then (what was read, unreadable problems, finished-not-fixed): **app 57, packages 149, proxy 96**, TutorFlowShot 4/4.
 
+### ✦ Handwritten "@" asks first (2026-11-15)
+- A handwritten "@…" command no longer runs on its own. After the writing pause the auto-scan reads it as
+  before, then shows an `AtCommandChip` beside the ink ("✦ Make “a clock”", or "Run “@balance …”" for an
+  exact engine): a tap makes it; starting a new stroke (`canvasViewDidBeginUsingTool`), undo, switching
+  pages or ~12s lets it go without making anything. Every cloud generation from ink is now a deliberate tap.
+- `extractAtCommands` counts an "@" only at the start of a line or after a space or "(", so
+  "sam@school.org" in someone's notes is never a command (and doesn't cut a real one short).
+- Settings: "Auto-run “@” commands" → "Suggest “@” commands while you write" (same stored key). The `@` bar
+  and Recognize (an explicit tap) still run a command straight away.
+- Checked on the iPad simulator with ink: "@a clock" got a "Make “aclock”" chip (the reading joined the
+  words, which the chip now shows before anything is made); a new stroke cleared it. 79 app unit tests.
+
 ### 🎓 Socratic tutor (2026-11-12)
 A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to
 it, never the answer or the corrected step. It builds on the red pen; nothing about correctness moved to
@@ -448,7 +460,7 @@ through a multi-agent adversarial review.
 - [x] The "@" command bar runs the real engines via shared routing (`CommandRunner`/`EngineKit`): `@balance`, `@molar` (fixed — the router never emitted it), `@units`, `@transcribe`, `@punnett`, `@check` (red-pen tutor via `InkLabMath` `checkChain`), `@differentiate`. Engine chips also appear on the recognition review sheet.
 
 ### In-canvas "@" ask-marker
-- [x] Handwrite "@…" and pause ~1.5s → the new strokes are read and, if they form an "@" command, it runs **automatically** (no Recognize tap). **Auto-scan is ON-DEVICE ONLY (2026-06-07 gating fix)** — Apple Vision, free/private; it acts **only** when it reads a leading "@", never escalates to the cloud, and shows no toast/animation for ordinary notes (previously it OCR-animated every pause and escalated to Claude on any short word starting with a/o/e/c/g/0/9/( — calling cloud AI on normal writing). Settings toggle "Auto-run @ commands" (default on). Ink is never erased (never-lose-ink); the result appears alongside.
+- [x] Handwrite "@…" and pause ~1.5s → the new strokes are read and, if they form an "@" command, it ~~runs **automatically**~~ is offered as a tap-to-make chip (2026-11-15; see above). **Auto-scan is ON-DEVICE ONLY (2026-06-07 gating fix)** — Apple Vision, free/private; it acts **only** when it reads a leading "@", never escalates to the cloud, and shows no toast/animation for ordinary notes (previously it OCR-animated every pause and escalated to Claude on any short word starting with a/o/e/c/g/0/9/( — calling cloud AI on normal writing). Settings toggle "Auto-run @ commands" (default on). Ink is never erased (never-lose-ink); the result appears alongside.
 
 ### Make-real (generate live widgets) — the headline feature
 - [x] **Journal live-object ops** (InkLabDoc, additive): `setObjectState` (edit a widget/chart/3D inline state) + `promote` (energy-level swap), both one-step-undoable, with fold/invert/remap arms. Tests `test_G`/`test_G2`. Existing case serialization unchanged.

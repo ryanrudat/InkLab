@@ -45,6 +45,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private let shapeDwellRadius: CGFloat = 10      // stroke-sample fallback: end-dwell wander tolerance (pt)
     private var insertOffset: CGFloat = 0
     private var allowsFingerDrawing = true
+    /// "Make “…”" chips for "@" commands just written (see `suggestAtCommands`).
+    private var atSuggestions: [AtCommandChip] = []
     /// Bounding box of the most recent lasso, so Recognize can read just that selection (cleared when
     /// new ink is drawn).
     private var lastLassoRect: CGRect?
@@ -272,6 +274,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         makeRealQueue.removeAll()
         pendingTutorReplies.removeAll()
         closeTutorWriteZone()
+        dismissAtSuggestions(animated: false)
         for case let placeholder as DesigningPlaceholderView in overlay.subviews {
             placeholder.stop()
             placeholder.removeFromSuperview()
@@ -382,6 +385,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     // MARK: - Unified undo / redo (the toolbar back/forward)
 
     func performUndo() {
+        dismissAtSuggestions()   // the "@" ink it was for may be what's being undone
         guard let step = undoSteps.popLast() else { return }
         applyHistoryStep(step, redo: false)
         redoSteps.append(step)
@@ -572,6 +576,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // Also cancel any pending auto-@ scan scheduled for the outgoing page so it can't OCR/run against
         // the new page (an already-in-flight scan is separately page-guarded in autoScanForCommand).
         pendingAutoScan?.cancel(); pendingAutoScan = nil
+        dismissAtSuggestions(animated: false)   // they belong to the page they were written on
         saveInkData(canvasView.drawing.dataRepresentation(), page: store.pageID)
         savedPages[store.pageID] = PageState(ink: canvasView.drawing, undo: undoSteps, redo: redoSteps,
                                              last: lastDrawing, consumed: consumedStrokeCount)
@@ -1172,7 +1177,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)   // wait until they've paused
     }
 
-    /// OCR only the strokes added since we last looked. If they read as "@…", run it and erase that ink.
+    /// OCR only the strokes added since we last looked. If they read as "@…", offer to make it (a chip
+    /// beside the writing; the ink stays).
     private func autoScanForCommand() {
         let tutorSessions = TutorLayout.sessions(on: store.page)
         guard autoCommandsEnabled || !tutorSessions.isEmpty else { return }
@@ -1220,6 +1226,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         }
         guard autoCommandsEnabled else { consumedStrokeCount = strokes.count; return }
         autoScanBusy = true
+        let inkBounds = batch.bounds
         startTrackedTask { [weak self] in
             guard let self else { return }
             defer {
@@ -1229,7 +1236,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                     self.scheduleAutoScan()
                 }
             }
-            // On-device first (free, private). Run EVERY "@" command found — multiple per page works.
+            // On-device first (free, private). Every "@" command found is suggested — several per page work.
             var read = (try? await self.recognizer.recognize(input))?.readAs ?? ""
             guard !Task.isCancelled, !self.isDismissing else { return }
             var commands = Self.extractAtCommands(read)
@@ -1245,28 +1252,64 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                 guard !Task.isCancelled, !self.isDismissing else { return }
             }
             // The user may have switched pages during recognition. If so, DON'T touch this (now-current)
-            // page's consumedStrokeCount or run the command here — the strokes still live on `scanPage`
-            // and will be re-scanned (and run exactly once) when the user returns to it.
+            // page's consumedStrokeCount or suggest anything here — the strokes still live on `scanPage`
+            // and will be re-scanned (and suggested once) when the user returns to it.
             guard self.store.pageID == scanPage else { return }
             self.consumedStrokeCount = firedCount   // examined — never re-scan these strokes (keep the ink)
-            for command in commands { self.runInkCommand(command, onPage: scanPage) }
+            // Nothing runs from ink on its own: each command waits as a chip beside the writing.
+            if !commands.isEmpty { self.suggestAtCommands(commands, near: inkBounds, page: scanPage) }
         }
+    }
+
+    // MARK: - "@" suggestions (tap to make)
+
+    /// Show a "Make “…”" chip beside the writing for each command, replacing any still showing. Tapping one
+    /// runs it (and clears the rest); writing on, switching pages or waiting lets them go.
+    private func suggestAtCommands(_ commands: [String], near ink: CGRect, page: UUID) {
+        dismissAtSuggestions(animated: false)
+        let chips = commands.map { AtCommandChip(command: $0, engine: isDeterministicEngineCommand($0), pageID: page) }
+        let frames = AtCommandChip.frames(widths: chips.map(\.bounds.width), near: ink, canvasWidth: view.bounds.width)
+        for (chip, frame) in zip(chips, frames) {
+            chip.frame = frame
+            chip.onMake = { [weak self, weak chip] in
+                guard let self, let chip else { return }
+                self.dismissAtSuggestions()
+                self.runInkCommand(chip.command, onPage: chip.pageID)
+            }
+            overlay.addSubview(chip)
+            chip.present()
+        }
+        atSuggestions = chips
+        if let first = chips.first {
+            UIAccessibility.post(notification: .announcement, argument: "\(first.accessibilityLabel ?? ""): tap to make it")
+        }
+    }
+
+    private func dismissAtSuggestions(animated: Bool = true) {
+        for chip in atSuggestions { chip.dismiss(animated: animated) }
+        atSuggestions = []
+    }
+
+    /// Writing on means "no": the suggestions go as soon as a new stroke starts.
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        if !atSuggestions.isEmpty { dismissAtSuggestions() }
     }
 
     /// Pull EVERY "@…" command out of recognized text. Handles multiple per page/line, e.g.
     /// "@a clock\n@a piano" → ["@a clock", "@a piano"] and "notes @balance H2 @molar C6" → the two
-    /// commands. A command runs from each "@" up to the next "@" (or end of line).
+    /// commands. A command starts at an "@" that begins a line or follows a space (or "("), so an email
+    /// address in someone's notes ("sam@school.org") is never one, and runs up to the next such "@".
     static func extractAtCommands(_ text: String) -> [String] {
         var commands: [String] = []
         for rawLine in text.split(whereSeparator: \.isNewline) {
-            let line = String(rawLine)
-            var i = line.startIndex
-            while let at = line[i...].firstIndex(of: "@") {
-                let after = line.index(after: at)
-                let next = line[after...].firstIndex(of: "@") ?? line.endIndex
-                let command = line[at..<next].trimmingCharacters(in: .whitespaces)
+            let line = Array(rawLine)
+            let starts = line.indices.filter { i in
+                line[i] == "@" && (i == 0 || line[i - 1].isWhitespace || line[i - 1] == "(")
+            }
+            for (k, start) in starts.enumerated() {
+                let end = k + 1 < starts.count ? starts[k + 1] : line.count
+                let command = String(line[start..<end]).trimmingCharacters(in: .whitespaces)
                 if command.count > 1 { commands.append(command) }
-                i = next
             }
         }
         return commands

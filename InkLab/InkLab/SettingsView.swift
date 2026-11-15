@@ -16,12 +16,12 @@ struct SettingsView: View {
                 Section {
                     Toggle("Left-handed", isOn: $settings.leftHanded)
                     Toggle("Finger / mouse drawing", isOn: $settings.fingerDrawing)
-                    Toggle("Auto-run “@” commands", isOn: $settings.autoCommands)
+                    Toggle("Suggest “@” commands while you write", isOn: $settings.autoCommands)
                     Toggle("Snap shapes on hold", isOn: $settings.snapShapesOnHold)
                 } header: {
                     Text("Writing")
                 } footer: {
-                    Text("Finger/mouse drawing: keep on to draw in the Simulator (no Apple Pencil). Auto-run “@” commands: when you handwrite something starting with “@” and pause, it runs automatically — turn off for distraction-free notes. Snap shapes on hold: draw a line or shape and hold the pencil still for ~½ second to snap it into a clean form.")
+                    Text("Finger/mouse drawing: keep on to draw in the Simulator (no Apple Pencil). Suggest “@” commands: when you handwrite something starting with “@” (like “@a clock”) and pause, a button appears beside it — tap it to make it, or keep writing and it goes away. Turn off for distraction-free notes; the “@” bar always works. Snap shapes on hold: draw a line or shape and hold the pencil still for ~½ second to snap it into a clean form.")
                 }
                 Section {
                     Toggle("Allow AI generation", isOn: $settings.cloudAIConsentGranted)

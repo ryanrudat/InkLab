@@ -135,8 +135,8 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     /// Allow finger/mouse to draw ink. On by default so the canvas works in the Simulator (which has
     /// no Apple Pencil); turn off on a real iPad for pencil-draws / finger-navigates (ADR 0005).
     @Published var fingerDrawing: Bool { didSet { UserDefaults.standard.set(fingerDrawing, forKey: Self.fingerDrawingKey) } }
-    /// Automatically run a handwritten "@…" command after a writing pause (no Recognize tap). Turn off
-    /// for distraction-free note-taking.
+    /// After a writing pause, offer a handwritten "@…" command as a tap-to-make chip beside it (it never
+    /// runs on its own). Turn off for distraction-free note-taking. Key unchanged from "auto-run".
     @Published var autoCommands: Bool { didSet { UserDefaults.standard.set(autoCommands, forKey: Self.autoCommandsKey) } }
 
     // MARK: Cloud AI consent (ADR 0002 / App Store §5.1.2(i)) — gates every "@" make-real generation.
