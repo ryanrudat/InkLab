@@ -71,8 +71,9 @@ a model.
   nothing has been read.
 - **Replies:** the note offers both. **Write on the page** highlights a free space under the problem
   (switching to the pen if needed); after a pause the auto-scan reads the ink written there as the reply
-  and the highlight goes away (✕ on it cancels). Writing anywhere else near the problem still counts too,
-  as before (consent-gated, works even with auto-"@" off). **Type** drops a box down inside the note
+  and the highlight goes away (✕ on it cancels). Writing that joins the problem's own ink, or sits right
+  by the note, still counts too (consent-gated, works even with auto-"@" off; see "Only real replies"
+  below). **Type** drops a box down inside the note
   (no popup): Return or the ↑ sends, **Another hint** asks for the next rung, tapping Type again folds it
   away; if the on-screen keyboard would cover it, the page scrolls it into view. Any math
   in a reply is **checked by the red pen** in context ("You: 2x = 4 ✓ checks out"); a verified step
@@ -110,6 +111,17 @@ a model.
   strokes being read and a bright trace running along them in writing order, in the desert palette with the
   "Designing" card's easing; still under Reduce Motion. 104 server tests, 68 app unit tests, 5 tutor UI
   tests.
+- **Only real replies (fix from a live run, 2026-11-15):** "2x + 3 = 7", written as a new problem under an
+  old "1+3=" note, was sent to that conversation as a reply ("That looks like a different problem"): any
+  ink within 100 pt of the problem or its note counted. Now `TutorLayout.replyTarget` (pure, replaces
+  `replyZone`) decides: ink in the open write-here space is that session's reply; otherwise it must land
+  on the problem, join the problem's own ink as one piece of writing (`InkGeometry.blocks`, the same
+  grouping Tutor reads by), or sit within about 1.5 letter heights of the note. Writing that starts a piece
+  of its own, or a batch that partly does, is left for Tutor or the "@" scan like any other ink; between
+  two conversations the nearer problem wins. A note that couldn't read its problem is still re-read by
+  writing over the old ink or right beside it. Not covered: a second free-written reply under an earlier
+  one, if it's too far from the problem itself (use Write on the page). 8 tests (`TutorReplyTests`); app
+  unit tests 76, TutorFlowShot 5/5 vs mock on iPad Air 11" (M3). Not tried with a Pencil.
 - **On the page (layout A, the margin note):** one note per session in the right margin, level with the
   line the verdict is about, with a thin connector to that line, placed right of all ink and objects in its
   band so it **never covers the student's writing or another object** (a widget's controls, a sticky), and

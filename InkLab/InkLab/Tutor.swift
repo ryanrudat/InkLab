@@ -569,9 +569,49 @@ enum TutorLayout {
         return zone
     }
 
-    /// Ink written here (after a pause) is a reply to the session: around the problem and its note.
-    static func replyZone(problem: CGRect, callouts: [CGRect]) -> CGRect {
-        callouts.reduce(problem) { $0.union($1) }.insetBy(dx: -100, dy: -100)
+    /// A tutor conversation new ink might be a reply to: its problem and the frames of its note(s).
+    struct ReplyCandidate {
+        var id: UUID
+        var problem: CGRect
+        var notes: [CGRect]
+    }
+
+    /// Which conversation new ink (written after a pause) is a reply to, if any. It counts when it is in
+    /// the open write-here space (`writeZone`, the session it was opened for), or when it belongs to that
+    /// conversation's writing: it lands on the problem, joins the problem's own ink as one piece of writing
+    /// (`InkGeometry.blocks`), or sits right by the note (about 1.5 letter heights). Writing that starts a
+    /// piece of its own — a new problem lower on the page — is no conversation's reply, and neither is a
+    /// batch where part of the new ink does. `oldInk`: the page's other strokes; the problem's own ink is
+    /// the part of it on the problem. With several matches, the nearest problem wins.
+    static func replyTarget(newInk: [CGRect], oldInk: [CGRect], sessions: [ReplyCandidate],
+                            writeZone: (session: UUID, rect: CGRect)?) -> UUID? {
+        let new = newInk.filter { !$0.isNull }
+        guard let first = new.first else { return nil }
+        if let zone = writeZone, sessions.contains(where: { $0.id == zone.session }),
+           new.contains(where: { $0.intersects(zone.rect) }) { return zone.session }
+        let written = new.dropFirst().reduce(first) { $0.union($1) }
+        func distance(_ a: CGRect, _ b: CGRect) -> CGFloat {
+            hypot(max(0, b.minX - a.maxX, a.minX - b.maxX), max(0, b.minY - a.maxY, a.minY - b.maxY))
+        }
+        return sessions
+            .filter { s in joins(new, problem: s.problem, problemInk: oldInk.filter { !$0.isNull && $0.intersects(s.problem) }, notes: s.notes) }
+            .min { distance(written, $0.problem) < distance(written, $1.problem) }?.id
+    }
+
+    /// Whether ALL of `new` belongs to one conversation's writing (see `replyTarget`).
+    static func joins(_ new: [CGRect], problem: CGRect, problemInk: [CGRect], notes: [CGRect]) -> Bool {
+        let strokes = problemInk + new
+        let reach = 1.5 * InkGeometry.letterHeight(strokes)
+        let notes = notes.filter { !$0.isNull }.map { $0.insetBy(dx: -reach, dy: -reach) }
+        for block in InkGeometry.blocks(strokes) {
+            let fresh = block.filter { $0 >= problemInk.count }.map { strokes[$0] }
+            guard !fresh.isEmpty else { continue }
+            let joined = block.count > fresh.count                                    // with the problem's ink
+                || fresh.contains { $0.intersects(problem) }                          // on the problem
+                || fresh.contains { r in notes.contains { $0.intersects(r) } }        // right by the note
+            if !joined { return false }
+        }
+        return true
     }
 
     /// Every tutor session on a page. A session is ONE note object whose payload is replaced per message

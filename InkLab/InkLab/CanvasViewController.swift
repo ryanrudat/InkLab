@@ -1200,17 +1200,19 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         )
         let firedCount = strokes.count
         let scanPage = store.pageID            // the page these strokes belong to
-        // Ink in the highlighted write-here space is that session's reply; otherwise new ink next to a
-        // session's problem (or its note) is. By a note that couldn't read its problem, it's the problem
-        // written again.
-        let target: TutorSession?
-        if let zone = tutorWriteZone, zone.page == scanPage, zone.rect.intersects(batch.bounds) {
-            target = tutorSessions.first { $0.latest.provenance.tutor.id == zone.session }?.latest.provenance.tutor
-        } else {
-            target = tutorSessions.first(where: {
-                TutorLayout.replyZone(problem: $0.latest.provenance.tutor.problem, callouts: $0.all.map(\.frame)).intersects(batch.bounds)
-            })?.latest.provenance.tutor
-        }
+        // Ink in the highlighted write-here space is that session's reply; otherwise new ink that joins a
+        // session's problem as one piece of writing (or sits right by its note) is. By a note that couldn't
+        // read its problem, it's the problem written again. Writing that starts a piece of its own (a new
+        // problem lower on the page) is left for Tutor or the "@" scan, like any other ink.
+        let zone = tutorWriteZone.flatMap { $0.page == scanPage ? (session: $0.session, rect: $0.rect) : nil }
+        let targetID = TutorLayout.replyTarget(
+            newInk: newStrokes.map(\.renderBounds), oldInk: strokes[..<consumedStrokeCount].map(\.renderBounds),
+            sessions: tutorSessions.map {
+                TutorLayout.ReplyCandidate(id: $0.latest.provenance.tutor.id, problem: $0.latest.provenance.tutor.problem,
+                                           notes: $0.all.map(\.frame))
+            },
+            writeZone: zone)
+        let target = tutorSessions.first { $0.latest.provenance.tutor.id == targetID }?.latest.provenance.tutor
         if let target {
             if target.isUnread { rereadTutorProblem(target, newInk: batch.bounds, firedCount: firedCount, page: scanPage) }
             else { readTutorReply(input, sessionID: target.id, firedCount: firedCount, page: scanPage) }
