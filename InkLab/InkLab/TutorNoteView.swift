@@ -20,8 +20,8 @@ struct TutorNoteStyle {
     var headerColor: UIColor = Theme.sun
     var bodyFont: UIFont = Theme.ui(15)
     var bodyColor: UIColor = Theme.ink
-    /// What Pip says (the latest message, and its earlier ones in the thread).
-    var tutorColor: UIColor = Theme.pip
+    /// What &Co says (the latest message, and its earlier ones in the thread).
+    var tutorColor: UIColor = Theme.tutorVoice
     var threadFont: UIFont = Theme.ui(13)
     var threadColor: UIColor = Theme.inkSecondary
     var studentColor: UIColor = Theme.ink
@@ -35,6 +35,17 @@ struct TutorNoteStyle {
     var connectorColor: UIColor = Theme.sun.withAlphaComponent(0.6)
     var connectorWidth: CGFloat = 1
     var anchorDotRadius: CGFloat = 2.5
+    /// What the latest message is about, lit up on the page: a soft marker band over those words with a
+    /// sun underline drawn left to right, like a teacher marking the spot.
+    /// On paper a highlighter wash; at night (where a wash turns muddy) a faint glow with a sun edge.
+    var focusFill = UIColor { $0.userInterfaceStyle == .dark ? Theme.sunYellow.withAlphaComponent(0.10)
+                                                             : Theme.sunYellow.withAlphaComponent(0.30) }
+    var focusEdge = UIColor { $0.userInterfaceStyle == .dark ? Theme.sun.withAlphaComponent(0.55)
+                                                             : Theme.sun.withAlphaComponent(0.22) }
+    var focusUnderline: UIColor = Theme.sun.withAlphaComponent(0.85)
+    var focusUnderlineWidth: CGFloat = 2
+    var focusPadding: CGFloat = 4
+    var focusCornerRadius: CGFloat = 6
     /// Room at the header's right for the note's ✕ (the host's close button, one per session).
     var closeInset: CGFloat = 30
 
@@ -77,6 +88,9 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
     var onResize: (() -> Void)?
     /// The anchored line's right end, in this view's coordinates (set by the host; nil = no connector).
     var anchorInSelf: CGPoint? { didSet { updateConnector() } }
+    /// What the latest message points at on the page, in this view's coordinates (set by the host). Lit
+    /// up, and the connector goes to it instead of the line's end.
+    var focusInSelf: [CGRect] = [] { didSet { if focusInSelf != oldValue { updateFocus(); updateConnector() } } }
 
     private(set) var isExpanded = false
     /// The drop-down box (nil = closed): `.type` for a reply, `.fixReading` for the problem itself
@@ -99,6 +113,8 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
     private let hintButton = UIButton(type: .system)
     private let connector = CAShapeLayer()
     private let anchorDot = CAShapeLayer()
+    private let focusBand = CAShapeLayer()
+    private let focusLine = CAShapeLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -142,6 +158,8 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
         hintButton.addAction(UIAction { [weak self] _ in self?.submit(wantsHint: true) }, for: .touchUpInside)
         for v in [typingCaption, field, sendButton, hintButton] as [UIView] { v.isHidden = true; addSubview(v) }
         layer.insertSublayer(connector, at: 0)
+        layer.insertSublayer(focusBand, at: 0)
+        layer.insertSublayer(focusLine, at: 1)
         layer.addSublayer(anchorDot)
         applyStyle()
     }
@@ -162,6 +180,13 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
         connector.fillColor = nil
         connector.lineWidth = s.connectorWidth
         anchorDot.fillColor = s.connectorColor.cgColor
+        focusBand.fillColor = s.focusFill.resolvedColor(with: traitCollection).cgColor
+        focusBand.strokeColor = s.focusEdge.resolvedColor(with: traitCollection).cgColor
+        focusBand.lineWidth = 1
+        focusLine.strokeColor = s.focusUnderline.cgColor
+        focusLine.fillColor = nil
+        focusLine.lineWidth = s.focusUnderlineWidth
+        focusLine.lineCap = .round
         let unread = provenance?.tutor.isUnread == true
         for (button, title, symbol) in [(writeButton, unread ? "Rewrite it" : "Write on the page", "pencil.tip"),
                                         (typeButton, unread ? "Type it" : "Type", "keyboard")] {
@@ -235,11 +260,12 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
         setNeedsLayout()
     }
 
-    /// "Pip · hint 2 of 4" while there's something to find; once the working checks out the hint count
+    /// "&Co · hint 2 of 4" while there's something to find; once the working checks out the hint count
     /// means nothing, and a problem that couldn't be read has no hints yet.
     static func headerText(_ session: TutorSession) -> String {
         let name = TutorSession.tutorName
         if session.isUnread { return name }
+        if session.isWriting { return "\(name) · hint \(session.rung) of \(TutorSession.maxRung)" }   // no checker to say it checks out
         if case .allValid(_) = session.verdict { return "\(name) · your working checks out" }
         return "\(name) · hint \(session.rung) of \(TutorSession.maxRung)"
     }
@@ -315,7 +341,8 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
         let next = mode == .write ? nil : mode
         guard next != typing else { return }
         typing = next
-        field.text = next == .fixReading ? (provenance?.tutor.pageLines.joined(separator: "; ") ?? "") : ""
+        let writing = provenance?.tutor.isWriting == true
+        field.text = next == .fixReading ? (provenance?.tutor.pageLines.joined(separator: writing ? " " : "; ") ?? "") : ""
         configureTyping()
         onResize?()
         setNeedsLayout()
@@ -324,13 +351,14 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
     }
 
     private func configureTyping() {
-        let s = style, unread = provenance?.tutor.isUnread == true
+        let s = style, unread = provenance?.tutor.isUnread == true, writing = provenance?.tutor.isWriting == true
         let caption: String, placeholder: String
         switch typing {
         case .fixReading:
-            caption = unread ? "Type the problem and your working. Put ; between lines."
-                             : "Fix anything I misread. Put ; between lines, and I'll start again from it."
-            placeholder = "2x + 3 = 7; 2x = 4"
+            caption = unread ? "Type what you wrote. For math working, put ; between lines."
+                : writing ? "Fix anything I misread, and I'll start again from it."
+                : "Fix anything I misread. Put ; between lines, and I'll start again from it."
+            placeholder = writing ? "What you wrote" : "2x + 3 = 7; 2x = 4"
             field.accessibilityIdentifier = "tutorReadingField"
             field.returnKeyType = .go
             sendButton.accessibilityLabel = "Start"
@@ -433,7 +461,13 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
     /// The thin line from the note to the line it is about, with a dot at the line's end. It leaves from
     /// whichever edge faces the line.
     private func updateConnector() {
-        guard let a = anchorInSelf, bounds.width > 0 else { connector.path = nil; anchorDot.path = nil; return }
+        // To the lit-up words when the message points at some (the nearest point of their band), else to
+        // the end of the line.
+        let target: CGPoint? = focusInSelf.first.map { f in
+            let band = f.insetBy(dx: -style.focusPadding, dy: -style.focusPadding)
+            return CGPoint(x: min(max(bounds.midX, band.minX), band.maxX), y: min(max(bounds.midY, band.minY), band.maxY))
+        } ?? anchorInSelf
+        guard let a = target, bounds.width > 0 else { connector.path = nil; anchorDot.path = nil; return }
         let path = UIBezierPath()
         if a.x < 0 {
             path.move(to: CGPoint(x: 0, y: min(max(a.y, 14), bounds.height - 14)))
@@ -452,6 +486,40 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
         anchorDot.path = UIBezierPath(ovalIn: CGRect(x: a.x - r, y: a.y - r, width: 2 * r, height: 2 * r)).cgPath
     }
 
+    /// The marker bands over the words the message is about, each with its underline.
+    private func updateFocus() {
+        let s = style
+        let bands = UIBezierPath(), lines = UIBezierPath()
+        for f in focusInSelf {
+            let band = f.insetBy(dx: -s.focusPadding, dy: -s.focusPadding)
+            bands.append(UIBezierPath(roundedRect: band, cornerRadius: s.focusCornerRadius))
+            lines.move(to: CGPoint(x: band.minX + 2, y: band.maxY))
+            lines.addLine(to: CGPoint(x: band.maxX - 2, y: band.maxY))
+        }
+        focusBand.path = focusInSelf.isEmpty ? nil : bands.cgPath
+        focusLine.path = focusInSelf.isEmpty ? nil : lines.cgPath
+        message.accessibilityValue = focusInSelf.isEmpty ? nil : Self.focusValue
+    }
+
+    /// Said after the message when it lights up part of the page.
+    static let focusValue = "Marked on your page"
+
+    /// A new spot to look at: the band fades in and its underline draws across, left to right.
+    func revealFocus() {
+        guard !focusInSelf.isEmpty else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0; fade.toValue = 1; fade.duration = 0.3
+        focusBand.add(fade, forKey: "reveal")
+        guard !UIAccessibility.isReduceMotionEnabled else { focusLine.add(fade, forKey: "reveal"); return }
+        let draw = CABasicAnimation(keyPath: "strokeEnd")
+        draw.fromValue = 0; draw.toValue = 1; draw.duration = 0.45
+        draw.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        focusLine.add(draw, forKey: "reveal")
+    }
+
+    /// How many spots on the page the latest message lights up (for tests and accessibility).
+    var focusCount: Int { focusInSelf.count }
+
     /// A tappable control at `point` (so the canvas can let it through while the lasso tool is active).
     func controlHit(_ point: CGPoint) -> UIView? {
         [writeButton, typeButton, readAsButton, earlierButton, field, sendButton, hintButton]
@@ -469,7 +537,7 @@ final class TutorWriteZoneView: UIView {
     private var style: TutorNoteStyle { .current }
 
     static let replyCaption = "Write your reply here. \(TutorSession.tutorName) reads it when you pause."
-    static let rewriteCaption = "Write the problem again here, a little larger. \(TutorSession.tutorName) reads it when you pause."
+    static let rewriteCaption = "Write it again here, a little larger. \(TutorSession.tutorName) reads it when you pause."
 
     init(frame: CGRect, caption text: String = TutorWriteZoneView.replyCaption) {
         super.init(frame: frame)

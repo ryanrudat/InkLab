@@ -20,8 +20,8 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
 all have working, tested cores. **149 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **57 app unit tests + UI tests** (the iPad target), plus a **TypeScript
-backend proxy** (`Server/`, **96 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
+`InkLabKit` umbrella), plus **68 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+backend proxy** (`Server/`, **104 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
 (hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
 
@@ -69,8 +69,10 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   the words; ink is never erased. Settings toggle (default on).
 - **Deterministic engines (COMPUTE)** via the `@`-command bar: `@balance`, `@molar`, `@units`,
   `@transcribe`, `@punnett`, `@check` (red-pen tutor), `@differentiate` — on the real engines.
-- **Socratic tutor** — lasso a problem + your working → **Tutor** (lasso menu, or its own
-  graduation-cap button in the dock). The red pen
+- **Socratic tutor** — write a problem + your working and tap **Tutor** (lasso menu, or its own
+  graduation-cap button in the dock). With no lasso it reads the piece of writing you did last among what's
+  on screen; with one, exactly the strokes the lasso caught (never other ink inside a rectangle round
+  them). While it reads, a sun-coloured light traces along those strokes in the order you wrote them. The red pen
   (`checkChain`) decides what's wrong; the proxy's `POST /tutor` (Claude Opus 5.5, low effort) only talks,
   one rung of a hint ladder at a time (nudge → question about the line → concept → worked example of a
   *different* problem), climbing only when the student asks. Every reply passes an **answer-leak guard**
@@ -78,12 +80,24 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   hint rather than ever showing the answer or the corrected step. Reply from the note: **Write on the
   page** highlights a space under the problem and reads what you write there after a pause (any step you
   write is checked by the red pen, and a verified fix is passed to the tutor as a correction), and
-  **Type** opens a text field. An unfinished line ("1+3=") gets a nudge to finish it, never "can't
+  **Type** drops a box down inside the note. An unfinished line ("1+3=") gets a nudge to finish it, never "can't
   read". The note shows what it read ("I read: 7+3=", tap to correct it and start over), and a problem
   it can't read at all gets a note offering **Rewrite it** or **Type it**. The tutor lives in one
   **margin note** beside
   the line it's about, with earlier messages folded away; undo rewinds the conversation a message at a
-  time. ⚠️ Needs the moderation safeguard before minors use it.
+  time. The tutor is called **&Co**, and what it says is in its own turquoise. When a message quotes your words
+  or names a line ("line 2"), those words light up on the page (a marker band with an underline drawn
+  across) and the note's connector goes to them.
+  ⚠️ Needs the moderation safeguard before minors use it.
+- **&Co on English and History** — write (or lasso) a paragraph, an answer to a question or notes and tap Tutor:
+  prose (a few words, no line of working) starts a *writing* session instead of the red pen. There is no
+  checker for prose, so &Co only asks questions, one rung at a time (big picture → one sentence of
+  theirs → the skill it needs, like evidence or cause and effect → the skill shown on a *different*,
+  everyday topic). The proxy (`POST /tutor` with `mode: "writing"`, `Server/src/writingTutor.ts`) rejects
+  any draft that writes it for the student (a quoted sentence that isn't theirs, "you could write …") or
+  supplies a fact (a year they didn't write, "actually …"), regenerates once, then falls back to a fixed
+  question. A math word problem gets asked for its working. When &Co means part of your writing it quotes
+  your exact words, and the app lights them up on the page.
 - **Generative make-real** — `@<anything>` generates a live widget via Claude (`claude-opus-4-8`,
   `max_tokens` 8192 → one pass, no truncation round-trips), rendered in a locked-down sandboxed
   **WKWebView** (CSP `default-src 'none'`, no network, navigation/`window.open` denied). A

@@ -41,8 +41,8 @@ struct TutorTests {
 
         let req = s.request(session: MakeRealSession(isOnline: true, userKind: "adult", aiConsentGranted: true, ageVerified: true))
         #expect(req.chain == "equation")
-        #expect(req.verdict.kind == "firstError" && req.verdict.line == 2)
-        #expect(req.protected.count == 1 && req.protected[0].kind == "equation")
+        #expect(req.verdict?.kind == "firstError" && req.verdict?.line == 2)
+        #expect(req.protected?.count == 1 && req.protected?.first?.kind == "equation")
         #expect(req.thread.isEmpty && req.strict == false)
 
         // Wire shape the proxy validates: optional fields are omitted, the reply's `guard` key decodes.
@@ -78,7 +78,7 @@ struct TutorTests {
         #expect(fixed.pageLines == s.pageLines)
         let req = fixed.request(session: .init(isOnline: true, userKind: "adult", aiConsentGranted: true, ageVerified: true))
         #expect(req.lines == ["2x + 3 = 7", "2x = 10", "x = 5"] && req.working == ["2x + 3 = 7", "2x = 4"])
-        #expect(req.verdict.kind == "allValid" && req.corrections.count == 1)
+        #expect(req.verdict?.kind == "allValid" && req.corrections?.count == 1)
 
         let stillWrong = s.addingStudentReply("2x = 3", wantsHint: false)
         #expect(stillWrong.thread.last?.check == .doesNotFollow)
@@ -113,8 +113,8 @@ struct TutorTests {
         #expect(s.verdict == .unfinished(line: 1))
         #expect(s.anchorLine == 1)
         let req = s.request(session: .init(isOnline: true, userKind: "adult", aiConsentGranted: true, ageVerified: true))
-        #expect(req.verdict.kind == "unfinished" && req.verdict.line == 1 && req.verdict.reason == nil)
-        #expect(req.chain == "expression" && req.protected.map(\.kind) == ["expression"])
+        #expect(req.verdict?.kind == "unfinished" && req.verdict?.line == 1 && req.verdict?.reason == nil)
+        #expect(req.chain == "expression" && req.protected?.map(\.kind) == ["expression"])
         // Its value is the answer: the app's own guard won't let it through either.
         #expect(TutorGuard.leak(in: "You get 4.", session: s) != nil)
         #expect(TutorGuard.leak(in: "What do you get when you put 1 and 3 together?", session: s) == nil)
@@ -175,7 +175,7 @@ struct TutorTests {
         // Two strokes on one line (e.g. "2x" and "= 10") merge into one row.
         let strokes = rows + [CGRect(x: 120, y: 152, width: 40, height: 16)]
         #expect(TutorLayout.lineRects(strokes: strokes, problem: problem, count: 3).map(\.minY) == [100, 150, 200])
-        // Ink that doesn't split into one row per transcribed line: even bands instead.
+        // Ink that doesn't split into one row per transcribed line still gives one band per line.
         #expect(TutorLayout.lineRects(strokes: [rows[0]], problem: problem, count: 2).count == 2)
 
         // The note points at the line the verdict is about (line 2 here).
@@ -247,9 +247,9 @@ struct TutorTests {
         #expect(note.isExpanded && note.fittingHeight(width: 280) > collapsed)
         let rows = note.subviews.compactMap { $0 as? UILabel }.filter { $0.accessibilityIdentifier == "tutorThread" && !$0.isHidden }
         #expect(rows.contains { $0.attributedText?.string == "You: 2x = 4  ✓ checks out" })
-        // Pip's earlier messages carry Pip's name and color; the latest one is in Pip's color too.
-        #expect(rows.contains { $0.text == "Pip: Look at line 2: what did you do?" && $0.textColor == Theme.pip })
-        #expect(label("tutorMessage")?.textColor == Theme.pip)
+        // &Co's earlier messages carry its name and color; the latest one is in its color too.
+        #expect(rows.contains { $0.text == "&Co: Look at line 2: what did you do?" && $0.textColor == Theme.tutorVoice })
+        #expect(label("tutorMessage")?.textColor == Theme.tutorVoice)
         #expect(collapsed >= first)   // one control taller than the first message's note, not one card per message
     }
 
@@ -285,7 +285,7 @@ struct TutorTests {
         note.configure(TutorCalloutProvenance(tutor: unread, turn: 1))
         func view<T: UIView>(_ id: String) -> T? { note.subviews.first { $0.accessibilityIdentifier == id } as? T }
         #expect((view("tutorMessage") as UILabel?)?.text == TutorSession.unreadMessage)
-        #expect((view("tutorHeader") as UILabel?)?.text == "Pip")
+        #expect((view("tutorHeader") as UILabel?)?.text == "&Co")
         #expect((view("tutorReadAs") as UIButton?)?.isHidden == true)
         #expect((view("tutorReplyWrite") as UIButton?)?.configuration?.title == "Rewrite it")
         #expect((view("tutorReplyType") as UIButton?)?.configuration?.title == "Type it")
@@ -338,11 +338,52 @@ struct TutorTests {
         #expect(sent.last == .reading("1+3=") && note.typing == nil)
     }
 
+    @Test func proseStartsAWritingSessionAndMathStaysMath() throws {
+        // English / History: a few words and no line of working. A year doesn't make it math.
+        #expect(TutorSession.looksLikeWriting("The Civil War started because of\ntaxes in 1861."))
+        #expect(TutorSession.looksLikeWriting("Romeo and Juliet is about two families; they hate each other."))
+        #expect(!TutorSession.looksLikeWriting("2x + 3 = 7\n2x = 10\nx = 5"))
+        #expect(!TutorSession.looksLikeWriting("1+3="))
+        #expect(!TutorSession.looksLikeWriting("so x = 4"))
+
+        let s = try TutorSession.start(read: "The Civil War started because of\ntaxes in 1861.", problem: problem).get()
+        #expect(s.isWriting && s.pageLines == ["The Civil War started because of", "taxes in 1861."] && s.anchorLine == 1)
+        #expect(s.readAs == "The Civil War started because of taxes in 1861." && s.facts == nil)
+        #expect(TutorNoteView.headerText(s) == "&Co · hint 1 of 4")
+
+        // It goes to the writing coach: the passage and the thread, no verdict, chain or protected results.
+        let req = s.request(session: .init(isOnline: true, userKind: "adult", aiConsentGranted: true, ageVerified: true))
+        #expect(req.mode == "writing" && req.lines == s.pageLines && req.verdict == nil && req.chain == nil && req.protected == nil)
+        let json = String(decoding: try JSONEncoder().encode(req), as: UTF8.self)
+        #expect(json.contains("\"mode\":\"writing\"") && !json.contains("verdict"))
+
+        // A reply is a message, never checked as math.
+        let replied = s.addingStudentReply("because the South wanted to keep slavery", wantsHint: false)
+        #expect(replied.thread.last == TutorTurn(role: .student, text: "because the South wanted to keep slavery"))
+
+        // A long typed paragraph is cut into lines the proxy accepts; a ";" is punctuation, not a new line.
+        let long = Array(repeating: "The colonists were angry about taxes; they had no say.", count: 8).joined(separator: " ")
+        let lines = TutorSession.writingLines(from: long)
+        #expect(lines.count > 1 && lines.allSatisfy { $0.count <= 200 } && lines.joined(separator: " ") == long)
+
+        // Correcting it to the same words (however it wraps) changes nothing; new words start over as writing.
+        #expect(s.readsTheSame(as: "The Civil War started because of taxes in 1861."))
+        #expect(!s.readsTheSame(as: "The Civil War started because of slavery."))
+        let fixed = try s.restarted(read: "The Civil War started because of slavery.", strokes: []).get()
+        #expect(fixed.isWriting && fixed.id == s.id)
+
+        // Math sessions (and every one saved before writing existed) have no mode, and decode as math.
+        let math = try TutorSession.start(read: "2x + 3 = 7\n2x = 10", problem: problem).get()
+        let data = try JSONEncoder().encode(math)
+        #expect(!math.isWriting && !String(decoding: data, as: UTF8.self).contains("\"mode\""))
+        #expect(try JSONDecoder().decode(TutorSession.self, from: data) == math)
+    }
+
     @Test func theHeaderStopsCountingHintsOnceTheWorkingChecksOut() {
         let wrong = session("2x + 3 = 7\n2x = 10")
-        #expect(TutorNoteView.headerText(wrong) == "Pip · hint 1 of 4")
+        #expect(TutorNoteView.headerText(wrong) == "&Co · hint 1 of 4")
         let finished = session("1+3=").addingStudentReply("4", wantsHint: false)
-        #expect(TutorNoteView.headerText(finished) == "Pip · your working checks out")
+        #expect(TutorNoteView.headerText(finished) == "&Co · your working checks out")
     }
 
     /// The journal is the source of truth: a session is ONE note object; each message replaces its payload

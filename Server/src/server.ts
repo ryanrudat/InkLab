@@ -5,6 +5,7 @@ import { httpAnthropicClient } from './anthropic.ts'
 import { handleRecognize } from './recognize.ts'
 import { handleMakeReal, DEFAULT_MAKE_REAL_DEADLINE_MS } from './makeReal.ts'
 import { handleTutor } from './tutor.ts'
+import { handleWritingTutor } from './writingTutor.ts'
 import { timingSafeEqual } from 'node:crypto'
 import type { AnthropicClient } from './types.ts'
 
@@ -121,7 +122,9 @@ export function createInkLabRequestListener(options: InkLabServerOptions = {}) {
       if (req.method === 'POST' && req.url === '/tutor') {
         const parsed = await parseJsonBody(req)
         if (!parsed.ok) return json(parsed.status, { error: parsed.error })
-        const out = await handleTutor(client, parsed.body, {
+        // English / History ("writing") or math (the default, and every older app build).
+        const handle = (parsed.body as any)?.mode === 'writing' ? handleWritingTutor : handleTutor
+        const out = await handle(client, parsed.body, {
           signal: requestController.signal,
           deadlineMs: options.tutorDeadlineMs,
         })

@@ -615,6 +615,20 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     // MARK: - Recognition (on-device Apple Vision)
 
+    /// The ink a read is about, as the strokes themselves rather than a rectangle round them: exactly what
+    /// the lasso caught; else, when `latestOnScreen`, the piece of writing done last among what's on screen
+    /// (see `InkGeometry.latestBlock`); else the whole page.
+    private func inkToRead(latestOnScreen: Bool) -> PKDrawing {
+        let drawing = canvasView.drawing
+        let lassoed = selectedStrokeIndices.filter { drawing.strokes.indices.contains($0) }
+        if !lassoed.isEmpty { return PKDrawing(strokes: lassoed.map { drawing.strokes[$0] }) }
+        guard latestOnScreen else { return drawing }
+        var visible = canvasView.bounds                                    // content coordinates
+        visible.size.height = max(1, visible.height - canvasView.contentInset.bottom)   // not under the keyboard
+        let block = InkGeometry.latestBlock(strokes: drawing.strokes.map(\.renderBounds), visible: visible)
+        return PKDrawing(strokes: block.map { drawing.strokes[$0] })
+    }
+
     /// Rasterize the page's ink, run on-device recognition, and hand the transcription to the SwiftUI
     /// review sheet. No ink leaves the device.
     func recognizeSelectionOrPage() {
@@ -623,20 +637,16 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             onStatus?("Write something to recognize first.")
             return
         }
-        // Prefer the lassoed region if one is active and overlaps ink; otherwise read the whole page.
-        var region = drawing.bounds
-        if let lasso = lastLassoRect {
-            let clipped = lasso.intersection(drawing.bounds)
-            if !clipped.isNull, clipped.width > 1, clipped.height > 1 { region = clipped }
-        }
-        region = region.insetBy(dx: -12, dy: -12)
-        guard !region.isNull, region.width > 1, region.height > 1,
-              let raster = PencilKitAdapters.raster(drawing, region: region) else {
+        // Exactly the lassoed strokes if there are any; otherwise the whole page.
+        let ink = inkToRead(latestOnScreen: false)
+        let region = ink.bounds.insetBy(dx: -12, dy: -12)
+        guard !ink.strokes.isEmpty, region.width > 1, region.height > 1,
+              let raster = PencilKitAdapters.raster(ink, region: region) else {
             onStatus?("Nothing to recognize.")
             return
         }
         let input = RecognitionInput(
-            strokes: PencilKitAdapters.strokes(drawing),
+            strokes: PencilKitAdapters.strokes(ink),
             raster: raster,
             region: Rect(x: Double(region.minX), y: Double(region.minY),
                          width: Double(region.width), height: Double(region.height)),
@@ -644,7 +654,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false)
         )
         onStatus?("Reading…")
-        overlay.showScan(in: region)
+        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
         let originPage = store.pageID    // tag any result to the page the recognize was started on
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -690,23 +700,21 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     func checkWork() {
         let drawing = canvasView.drawing
         guard !drawing.strokes.isEmpty else { onStatus?("Write some working first, then tap Check."); return }
-        var region = drawing.bounds
-        if let lasso = lastLassoRect {
-            let clipped = lasso.intersection(drawing.bounds)
-            if !clipped.isNull, clipped.width > 1, clipped.height > 1 { region = clipped }
-        }
-        region = region.insetBy(dx: -12, dy: -12)
-        guard !region.isNull, region.width > 1, region.height > 1,
-              let raster = PencilKitAdapters.raster(drawing, region: region) else {
+        // The lassoed strokes, or the working written last on screen — never other ink that happens to sit
+        // inside a rectangle round it.
+        let ink = inkToRead(latestOnScreen: true)
+        let region = ink.bounds.insetBy(dx: -12, dy: -12)
+        guard !ink.strokes.isEmpty, region.width > 1, region.height > 1,
+              let raster = PencilKitAdapters.raster(ink, region: region) else {
             onStatus?("Nothing to check."); return
         }
         let input = RecognitionInput(
-            strokes: PencilKitAdapters.strokes(drawing), raster: raster,
+            strokes: PencilKitAdapters.strokes(ink), raster: raster,
             region: Rect(x: Double(region.minX), y: Double(region.minY), width: Double(region.width), height: Double(region.height)),
             domainHint: .math,
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         onStatus?("Checking…")
-        overlay.showScan(in: region)
+        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
         let originPage = store.pageID    // tag the verdict to the page being checked
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -730,28 +738,25 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // The tutor talks through the proxy, so it needs the AI permission up front (the server re-checks).
         if let reason = makeRealSession.tutorBlockReason { onStatus?(reason); return }
         let drawing = canvasView.drawing
-        guard !drawing.strokes.isEmpty else { onStatus?("Write a problem and your working, lasso it, then tap Tutor."); return }
-        var region = drawing.bounds
-        if let lasso = lastLassoRect {
-            let clipped = lasso.intersection(drawing.bounds)
-            if !clipped.isNull, clipped.width > 1, clipped.height > 1 { region = clipped }
-        }
-        region = region.insetBy(dx: -12, dy: -12)
-        guard !region.isNull, region.width > 1, region.height > 1,
-              let raster = PencilKitAdapters.raster(drawing, region: region) else { onStatus?("Nothing to read."); return }
+        guard !drawing.strokes.isEmpty else { onStatus?("Write a problem and your working, or a paragraph, then tap Tutor."); return }
+        // Exactly the strokes it's about: what the lasso caught, or the piece of writing done last on screen.
+        let ink = inkToRead(latestOnScreen: true)
+        let region = ink.bounds.insetBy(dx: -12, dy: -12)
+        guard !ink.strokes.isEmpty, region.width > 1, region.height > 1,
+              let raster = PencilKitAdapters.raster(ink, region: region) else { onStatus?("Nothing to read."); return }
         let input = RecognitionInput(
-            strokes: PencilKitAdapters.strokes(drawing), raster: raster,
+            strokes: PencilKitAdapters.strokes(ink), raster: raster,
             region: Rect(x: Double(region.minX), y: Double(region.minY), width: Double(region.width), height: Double(region.height)),
             domainHint: .math,
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
-        // Where each line of the working is on the page (the note points at one of them).
-        let strokeBounds = drawing.strokes.map(\.renderBounds)
+        // Where each line of it is on the page (the note points at them), from these strokes only.
+        let strokeBounds = ink.strokes.map(\.renderBounds)
         // The problem's own ink is not a reply: never let a pending auto-scan read it back to the tutor.
         pendingAutoScan?.cancel(); pendingAutoScan = nil
         consumedStrokeCount = drawing.strokes.count
         clearLassoSelection()
-        onStatus?("Reading your working…")
-        overlay.showScan(in: region)
+        onStatus?("Reading your writing…")
+        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
         let originPage = store.pageID
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -805,7 +810,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         case .reply(let text, let wantsHint):
             sendTutorReply(sessionID: session.id, text: text, wantsHint: wantsHint, page: page)
         case .reading(let text):
-            guard TutorSession.steps(from: text) != session.pageLines else { return }
+            guard !session.readsTheSame(as: text) else { return }
             restartTutor(session, read: text, page: page)
         }
     }
@@ -828,7 +833,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         pendingAutoScan?.cancel(); pendingAutoScan = nil
         consumedStrokeCount = canvasView.drawing.strokes.count
         canvasView.scrollRectToVisible(rect.insetBy(dx: -24, dy: -24), animated: true)
-        onStatus?(session.isUnread ? "Write the problem again in the highlighted space — \(TutorSession.tutorName) reads it when you pause."
+        onStatus?(session.isUnread ? "Write it again in the highlighted space — \(TutorSession.tutorName) reads it when you pause."
                                    : "Write your reply in the highlighted space — \(TutorSession.tutorName) reads it when you pause.")
     }
 
@@ -861,16 +866,17 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private func rereadTutorProblem(_ session: TutorSession, newInk: CGRect, firedCount: Int, page: UUID) {
         let drawing = canvasView.drawing
         let region = (newInk.intersects(session.problem) ? session.problem.union(newInk) : newInk).insetBy(dx: -12, dy: -12)
-        guard !region.isNull, region.width > 1, region.height > 1,
-              let raster = PencilKitAdapters.raster(drawing, region: region) else { consumedStrokeCount = firedCount; return }
+        let ink = PKDrawing(strokes: drawing.strokes.filter { $0.renderBounds.intersects(region) })
+        guard !ink.strokes.isEmpty, region.width > 1, region.height > 1,
+              let raster = PencilKitAdapters.raster(ink, region: region) else { consumedStrokeCount = firedCount; return }
         let input = RecognitionInput(
-            strokes: PencilKitAdapters.strokes(drawing), raster: raster,
+            strokes: PencilKitAdapters.strokes(ink), raster: raster,
             region: Rect(x: Double(region.minX), y: Double(region.minY), width: Double(region.width), height: Double(region.height)),
             domainHint: .math,
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         autoScanBusy = true
-        onStatus?("Reading your working…")
-        overlay.showScan(in: region)
+        onStatus?("Reading your writing…")
+        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
         startTrackedTask { [weak self] in
             guard let self else { return }
             defer {
@@ -930,6 +936,10 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             var next = session
             next.rung = reply.rung
             next.thread.append(TutorTurn(role: .tutor, text: reply.reply))
+            // Light up what this message is about: the words it quotes, or the line it names.
+            let ink = (page == store.pageID ? canvasView.drawing : loadedInk(page)).strokes.map(\.renderBounds)
+            let focus = TutorFocus.rects(for: reply.reply, session: next, ink: ink)
+            next.focus = focus.isEmpty ? nil : focus
             putTutorNote(next, text: reply.reply, page: page)
             onStatus?("")
         } catch {

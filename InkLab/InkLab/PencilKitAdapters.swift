@@ -51,3 +51,14 @@ enum PencilKitAdapters {
                            height: Int(image.size.height * effectiveScale))
     }
 }
+
+extension PencilKitAdapters {
+    /// A stroke's rendered path as points on the page (transform applied), for drawing over it — the scan
+    /// light that traces the writing being read. Long strokes are thinned so a whole page stays cheap.
+    static func tracePoints(_ stroke: PKStroke) -> [CGPoint] {
+        let pts = hitTestPoints(stroke).map { CGPoint(x: $0.x, y: $0.y) }
+        guard pts.count > 400 else { return pts }
+        let step = pts.count / 400 + 1
+        return pts.enumerated().filter { $0.offset % step == 0 || $0.offset == pts.count - 1 }.map(\.element)
+    }
+}

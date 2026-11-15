@@ -65,14 +65,16 @@ struct TutorWireTarget: Codable, Sendable, Equatable {
 
 struct TutorRequest: Codable, Sendable {
     var session: MakeRealSession
-    /// The working as written on the page ("line N" always means one of these).
+    /// "writing" for English / History (Server/src/writingTutor.ts); nil for math.
+    var mode: String? = nil
+    /// The working as written on the page ("line N" always means one of these), or the writing as read.
     var lines: [String]
-    /// The working as the engine now understands it, after the corrections.
-    var working: [String]
-    var corrections: [TutorCorrection]
-    var chain: String
-    var verdict: TutorWireVerdict
-    var protected: [TutorWireTarget]
+    /// Math only: the working as the engine now understands it, after the corrections.
+    var working: [String]? = nil
+    var corrections: [TutorCorrection]? = nil
+    var chain: String? = nil
+    var verdict: TutorWireVerdict? = nil
+    var protected: [TutorWireTarget]? = nil
     var thread: [TutorTurn]
     var strict: Bool
 }
@@ -86,6 +88,10 @@ struct TutorReply: Codable, Sendable, Equatable {
 }
 
 // MARK: - Session state
+
+/// What &Co is helping with. Math working is checked line by line by the red pen; writing (English,
+/// History: a paragraph, an answer, notes) has no checker, so &Co only asks questions about it.
+enum TutorMode: String, Codable, Sendable { case writing }
 
 /// One tutoring conversation about one problem. `pageLines` is what the page shows (and never changes);
 /// `lines` is the working as the engine currently understands it — a verified step the student writes in
@@ -105,11 +111,52 @@ struct TutorSession: Codable, Sendable, Equatable {
     var corrections: [TutorCorrection] = []
     var thread: [TutorTurn] = []
     var rung = 1
+    /// nil = math (and every session saved before the tutor took writing).
+    var mode: TutorMode? = nil
+    /// What &Co's latest message points at on the page (the words it quotes, the line it names), in
+    /// content coordinates. nil when it points at nothing in particular.
+    var focus: [CGRect]? = nil
 
     static let maxRung = 4
 
+    var isWriting: Bool { mode == .writing }
+    /// The red pen's verdict. Math only: writing has no checker (never ask for it on a writing session).
     var verdict: TutorVerdict { checkChain(lines) }
-    var facts: ProblemFacts? { problemFacts(lines) }
+    var facts: ProblemFacts? { isWriting ? nil : problemFacts(lines) }
+
+    /// Prose, not math working: a few words, and no line that reads as a step of working. A history answer
+    /// with a year in it ("taxes in 1861") is still writing; "2x + 3 = 7" or "1+3=" is math.
+    static func looksLikeWriting(_ read: String) -> Bool {
+        let words = read.split(whereSeparator: { !$0.isLetter && $0 != "'" }).filter { $0.count >= 2 }
+        guard words.count >= 4 else { return false }
+        return !steps(from: read).contains { step(in: $0) != nil }
+    }
+
+    /// Writing, one handwritten line each (only line breaks split it: a ";" is punctuation in prose). A
+    /// typed paragraph is cut at word boundaries into lines the proxy accepts.
+    static func writingLines(from read: String) -> [String] {
+        read.split(whereSeparator: \.isNewline).flatMap { row -> [String] in
+            var out: [String] = [], line = ""
+            for word in row.split(whereSeparator: \.isWhitespace) {
+                if !line.isEmpty, line.count + 1 + word.count > 200 { out.append(line); line = "" }
+                line += line.isEmpty ? String(word.prefix(200)) : " \(word)"
+            }
+            return line.isEmpty ? out : out + [line]
+        }
+    }
+
+    /// The page lines a reading becomes, as `start` would split it.
+    static func pageLines(from read: String) -> [String] {
+        looksLikeWriting(read) ? writingLines(from: read) : steps(from: read)
+    }
+
+    /// `text` reads the same as what's on the note already (so correcting it to that changes nothing).
+    func readsTheSame(as text: String) -> Bool {
+        guard Self.looksLikeWriting(text) == isWriting else { return false }
+        guard isWriting else { return Self.steps(from: text) == pageLines }
+        let words = { (s: String) in s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }) }
+        return words(text) == words(pageLines.joined(separator: " "))
+    }
 
     /// Split a transcription into steps exactly as the red pen does (one step per line, or `;`).
     static func steps(from read: String) -> [String] {
@@ -121,9 +168,15 @@ struct TutorSession: Codable, Sendable, Equatable {
     /// Start a session on freshly read working, or say why not (nothing the engine can work with).
     /// `strokes` are the page's ink bounds, used to find each line on the page.
     static func start(read: String, problem: CGRect, strokes: [CGRect] = []) -> Result<TutorSession, TutorStartError> {
-        let lines = steps(from: read)
+        let writing = looksLikeWriting(read)
+        let lines = writing ? writingLines(from: read) : steps(from: read)
         guard !lines.isEmpty else { return .failure(.nothingRead) }
         guard lines.count <= 30, lines.allSatisfy({ $0.count <= 200 }) else { return .failure(.tooLong) }
+        if writing {    // no verdict to point at: the note sits level with the first line
+            return .success(TutorSession(problem: problem, pageLines: lines,
+                                         lineRects: TutorLayout.lineRects(strokes: strokes, problem: problem, count: lines.count),
+                                         anchorLine: 1, lines: lines, mode: .writing))
+        }
         let anchor: Int
         switch checkChain(lines) {
         case .firstError(let line, _, _, _), .unsupported(let line, _), .unfinished(let line):
@@ -138,10 +191,10 @@ struct TutorSession: Codable, Sendable, Equatable {
     /// Nothing could be read from the page: the note says so and offers to rewrite or type the problem.
     /// No verdict and nothing for the proxy; the next reading (or typed problem) starts the session.
     var isUnread: Bool { pageLines.isEmpty }
-    /// The tutor's name: on its notes ("Pip · hint 1 of 4"), beside its earlier messages, and in what the
+    /// The tutor's name: on its notes ("&Co · hint 1 of 4"), beside its earlier messages, and in what the
     /// app says about it while you work with it.
-    static let tutorName = "Pip"
-    static let unreadMessage = "I couldn't read your working. Can you write it again a little larger, or type it?"
+    static let tutorName = "&Co"
+    static let unreadMessage = "I couldn't read that. Can you write it again a little larger, or type it?"
 
     static func unread(problem: CGRect) -> TutorSession {
         var s = TutorSession(problem: problem, pageLines: [], lineRects: [], anchorLine: 0, lines: [])
@@ -162,15 +215,21 @@ struct TutorSession: Codable, Sendable, Equatable {
     }
 
     /// What the note shows as read ("I read: 2x + 3 = 7 · 2x = 10"), so a misreading can be caught.
-    var readAs: String { pageLines.joined(separator: "  ·  ") }
+    /// Writing reads as one passage (its line breaks are only where the handwriting wrapped).
+    var readAs: String { pageLines.joined(separator: isWriting ? " " : "  ·  ") }
 
-    /// The page line the note points at, in content coordinates.
+    /// Where the note points, in content coordinates: what the latest message is about, else the line the
+    /// verdict was about.
     var anchorRect: CGRect {
-        lineRects.indices.contains(anchorLine - 1) ? lineRects[anchorLine - 1] : problem
+        if let first = focus?.first { return first }
+        return lineRects.indices.contains(anchorLine - 1) ? lineRects[anchorLine - 1] : problem
     }
 
     /// The request for the next tutor message (the proxy is stateless: the whole thread, every turn).
     func request(session consent: MakeRealSession, strict: Bool = false) -> TutorRequest {
+        if isWriting {
+            return TutorRequest(session: consent, mode: TutorMode.writing.rawValue, lines: pageLines, thread: thread, strict: strict)
+        }
         let facts = self.facts
         return TutorRequest(session: consent, lines: pageLines, working: lines, corrections: corrections,
                             chain: (facts?.chain ?? .expression).rawValue,
@@ -279,6 +338,11 @@ struct TutorSession: Codable, Sendable, Equatable {
     func addingStudentReply(_ text: String, wantsHint: Bool) -> TutorSession {
         var next = self
         let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+        if isWriting {     // nothing to check: it's a message
+            next.thread.append(TutorTurn(role: .student, text: trimmed.isEmpty ? "Another hint, please." : trimmed,
+                                         wantsHint: wantsHint ? true : nil))
+            return next
+        }
         let question = !wantsHint && Self.isQuestion(trimmed)
         let checked = wantsHint ? nil : checkAttempt(trimmed)
         next.thread.append(TutorTurn(role: .student, text: trimmed.isEmpty ? "Another hint, please." : trimmed,
@@ -299,7 +363,7 @@ enum TutorStartError: Error, Equatable {
     var message: String {
         switch self {
         case .nothingRead: return "Couldn't read your working — try writing larger and clearer."
-        case .tooLong: return "That's a lot of working — lasso just one problem for the tutor."
+        case .tooLong: return "That's a lot to read at once — lasso just one problem or one paragraph."
         }
     }
 }
@@ -315,6 +379,7 @@ enum TutorGuard {
 
     /// Math-free last resort when even a strict regeneration leaks (fail closed).
     static func genericHint(for session: TutorSession) -> String {
+        if session.isWriting { return "What's the main point you want your reader to take away from this?" }
         switch session.verdict {
         case .firstError(let line, _, _, _) where line <= session.pageLines.count && session.corrections.isEmpty:
             return "Look again at line \(line): what did you do to get there from the line above?"
@@ -442,19 +507,11 @@ enum TutorLayout {
         }
     }
 
-    /// The page's lines of ink inside the problem, top to bottom: strokes grouped into rows by vertical
-    /// overlap. When that doesn't give one row per transcribed line, the problem is split evenly instead.
+    /// The page's lines of ink inside the problem, top to bottom, one per transcribed line (see
+    /// `InkGeometry.lines`). With no ink to go on (a typed problem), the problem is split evenly.
     static func lineRects(strokes: [CGRect], problem: CGRect, count: Int) -> [CGRect] {
         guard count > 0 else { return [] }
-        var rows: [CGRect] = []
-        for r in strokes.filter({ $0.intersects(problem) && !$0.isNull }).sorted(by: { $0.midY < $1.midY }) {
-            if let last = rows.last {
-                let overlap = min(last.maxY, r.maxY) - max(last.minY, r.minY)
-                if overlap > 0.3 * min(max(last.height, 1), max(r.height, 1)) { rows[rows.count - 1] = last.union(r); continue }
-            }
-            rows.append(r)
-        }
-        if rows.count == count { return rows }
+        if let lines = InkGeometry.lines(strokes.filter { !$0.isNull && $0.intersects(problem) }, count: count) { return lines }
         let h = problem.height / CGFloat(count)
         return (0..<count).map { CGRect(x: problem.minX, y: problem.minY + CGFloat($0) * h, width: problem.width, height: h) }
     }

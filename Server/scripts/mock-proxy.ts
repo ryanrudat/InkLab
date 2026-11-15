@@ -25,6 +25,13 @@ const LADDER = [
   "Here's a different one: from 5y + 4 = 19, take 4 from both sides to get 5y = 15. Can you make the same first move on line 1?",
 ]
 
+const WRITING_LADDER = [
+  'What is the main reason you want your reader to remember about why the war started?',
+  'You wrote "because of taxes": which taxes do you mean, and how do you know they started it?',
+  'A strong history answer backs up its claim with specific evidence. What evidence could show your reason is the main one?',
+  'Here is the move with a different topic: "Our team lost because we missed practice all week." Can you try that with your own reason?',
+]
+
 const say = (text: string): AnthropicResponse => ({ text, stopReason: 'end_turn' })
 
 const client: AnthropicClient = {
@@ -50,6 +57,16 @@ const client: AnthropicClient = {
       else if (!strict && opts.messages.length === 1) draft = 'Subtract 3 from both sides and you get x = 2, see?'   // leaks: the guard must reject it
       else draft = LADDER[Math.min(LADDER.length, Math.max(1, level)) - 1]
       console.log(`[tutor] model=${opts.model} effort=${opts.effort} level=${level} strict=${strict} → ${JSON.stringify(draft)}`)
+      return say(draft)
+    }
+    if (system.includes("InkLab's writing tutor")) {
+      // The first draft writes a sentence for the student: the guard must reject it.
+      const strict = system.includes('previous draft was rejected')
+      const level = Number(/Current level: (\d)/.exec(system)?.[1] ?? 1)
+      const draft = !strict && opts.messages.length === 1
+        ? 'You could write "The war started because the states disagreed about slavery." Does that help?'
+        : WRITING_LADDER[Math.min(WRITING_LADDER.length, Math.max(1, level)) - 1]
+      console.log(`[writing] model=${opts.model} level=${level} strict=${strict} → ${JSON.stringify(draft)}`)
       return say(draft)
     }
     return say('<!DOCTYPE html><html><head><title>Mock</title></head><body>mock widget</body></html>\n<!-- INKLAB_DONE -->')

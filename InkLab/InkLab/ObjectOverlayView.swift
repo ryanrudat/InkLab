@@ -24,7 +24,7 @@ final class ObjectOverlayView: UIView {
     var onTutorTyped: ((UUID, TutorTypedReply) -> Void)?
 
     private var hosts: [UUID: ObjectHostView] = [:]
-    private var scanView: UIView?
+    private var scanView: InkScanView?
     /// Generated widgets are expensive: every live renderer owns a WKWebView/WebContent process. Keep a
     /// small, deterministic working set and let the remaining hosts display their last snapshot.
     private let maximumActiveWebWidgets = 4
@@ -94,36 +94,18 @@ final class ObjectOverlayView: UIView {
         for host in hosts.values { host.setPencilErasesAnnotation(on) }
     }
 
-    /// Show a "reading…" scan sweep over a region while recognition runs (so the user sees it working).
-    func showScan(in rect: CGRect) {
+    /// While recognition runs, light up the writing being read: the strokes themselves (each one's points
+    /// in content coordinates), not a box round them. See `InkScanView`.
+    func showScan(strokes: [[CGPoint]]) {
         hideScan()
-        guard rect.width > 1, rect.height > 1 else { return }
-        let v = UIView(frame: rect)
-        v.isUserInteractionEnabled = false
-        v.backgroundColor = Theme.sun.withAlphaComponent(0.10)
-        v.layer.cornerRadius = 8
-        v.layer.cornerCurve = .continuous
-        v.layer.borderColor = Theme.sun.withAlphaComponent(0.55).cgColor
-        v.layer.borderWidth = 1
-        v.clipsToBounds = true
-        let sweep = CAGradientLayer()
-        sweep.frame = CGRect(x: 0, y: 0, width: 44, height: rect.height)
-        sweep.startPoint = CGPoint(x: 0, y: 0.5); sweep.endPoint = CGPoint(x: 1, y: 0.5)
-        sweep.colors = [Theme.sun.withAlphaComponent(0).cgColor,
-                        Theme.sun.withAlphaComponent(0.40).cgColor,
-                        Theme.sun.withAlphaComponent(0).cgColor]
-        v.layer.addSublayer(sweep)
-        let anim = CABasicAnimation(keyPath: "position.x")
-        anim.fromValue = -22
-        anim.toValue = rect.width + 22
-        anim.duration = 0.9
-        anim.repeatCount = .infinity
-        sweep.add(anim, forKey: "sweep")
+        guard strokes.contains(where: { !$0.isEmpty }) else { return }
+        let v = InkScanView(strokes: strokes)
         addSubview(v)
+        v.start()
         scanView = v
     }
 
-    func hideScan() { scanView?.removeFromSuperview(); scanView = nil }
+    func hideScan() { scanView?.finish(); scanView = nil }
 
     /// What's being typed into on the page right now, if anything (a tutor note's box, a sticky).
     var focusedTextInput: UIView? {
@@ -346,6 +328,7 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     /// grip, and the ✕ closes the whole session.
     private var tutorNote: TutorNoteView?
     private var tutorAnchor: CGRect?                    // the anchored page line, content coordinates
+    private var tutorFocus: [CGRect] = []               // what the latest message lights up, content coordinates
     private let resizeHandle = UIView()
     private let resizeGrip = UIImageView(image: UIImage(systemName: "arrow.up.left.and.arrow.down.right",
                                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold)))
@@ -570,11 +553,12 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
     private func updateTutorConnector() {
         guard let tutorNote, let anchor = tutorAnchor else { return }
         let origin = CGPoint(x: center.x - bounds.width / 2, y: center.y - bounds.height / 2)
+        tutorNote.focusInSelf = tutorFocus.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
         tutorNote.anchorInSelf = CGPoint(x: anchor.maxX + 4 - origin.x, y: anchor.midY - origin.y)
     }
 
     private func rebuild(for kind: String) {
-        tutorNote?.removeFromSuperview(); tutorNote = nil; tutorAnchor = nil
+        tutorNote?.removeFromSuperview(); tutorNote = nil; tutorAnchor = nil; tutorFocus = []
         resizeHandle.isHidden = false
         deleteButton.accessibilityIdentifier = nil
         widget?.removeFromSuperview(); widget = nil
@@ -675,7 +659,11 @@ final class ObjectHostView: UIView, UIGestureRecognizerDelegate, UITextViewDeleg
             if case .callout(_, _, let json) = payload, let provenance = TutorCalloutProvenance.decode(json) {
                 tutorNote.configure(provenance)
                 tutorAnchor = provenance.tutor.anchorRect
+                let focus = provenance.tutor.focus ?? []
+                let moved = focus != tutorFocus
+                tutorFocus = focus
                 updateTutorConnector()
+                if moved { tutorNote.revealFocus() }   // a new spot to look at: draw the eye to it
             }
             return
         }

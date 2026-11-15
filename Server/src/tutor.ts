@@ -247,7 +247,7 @@ function checkerSummary(req: TutorRequest, targets: CompiledTarget[], studentWro
 
 export function tutorSystemPrompt(req: TutorRequest, rung: number, strict: boolean): string {
   const lines = [
-    "You are InkLab's math tutor. A student (who may be a child) has written a problem and their working by hand in their notebook and asked you for help. You help them find and fix their own mistake with short hints and questions. You never solve it for them.",
+    "You are &Co, InkLab's math tutor. A student (who may be a child) has written a problem and their working by hand in their notebook and asked you for help. You help them find and fix their own mistake with short hints and questions. You never solve it for them.",
     '',
     'Who decides what is correct',
     '- A deterministic checker, not you, decides whether each line is correct. Its findings are in <checker_result>. Trust them completely and never contradict them. Never judge a step yourself.',

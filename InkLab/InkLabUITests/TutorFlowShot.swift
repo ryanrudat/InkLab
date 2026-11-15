@@ -164,6 +164,7 @@ final class TutorFlowShot: XCTestCase {
         stroke(app, from: CGPoint(x: z.minX + 30, y: z.midY + 10), to: CGPoint(x: z.minX + 130, y: z.midY + 16))
         XCTAssertTrue(waitLabel(message) { $0 != first && (!self.isMock || $0.contains("Nice fix to line 2")) }, "the written reply was never answered")
         XCTAssertEqual(app.otherElements.matching(identifier: "tutorNote").count, 1, "one note per session, not one card per message")
+        if isMock { XCTAssertEqual(message.value as? String, "Marked on your page", "\"line 2\" should light up line 2") }
         let earlier = app.buttons["tutorEarlier"]
         XCTAssertTrue(earlier.label.contains("2 earlier"), earlier.label)
         earlier.tap()
@@ -172,7 +173,7 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(fixRow.exists && fixRow.label.contains("checks out"), "the engine's check isn't in the thread")
         XCTAssertFalse(zone.exists, "the write-here space should close once the reply is read")
         // The working checks out now, so the header stops counting hints.
-        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Pip · your working checks out")
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "&Co · your working checks out")
         shot("2-written-fix-thread-expanded")
         earlier.tap()   // fold it again
         XCTAssertTrue(waitLabel(earlier, timeout: 5) { $0.contains("2 earlier") })
@@ -249,6 +250,44 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(waitLabel(readAs, timeout: 5) { $0 == "I read: 7+3=" }, "undo should go back to the old reading")
     }
 
+    /// English / History: a paragraph gets &Co's questions, not the red pen. The mock's first draft writes
+    /// a sentence for the student; the proxy's guard rejects it and the stricter regeneration asks instead.
+    @MainActor
+    func testTutorCoachesWriting() throws {
+        let app = try launchIntoNewNotebook()
+        try XCTSkipUnless(isMock, "needs the mock's scripted reading")
+        setMockReading("The Civil War started because of\ntaxes in 1861.")
+        defer { setMockReading(nil) }
+        stroke(app, from: CGPoint(x: 60, y: 300), to: CGPoint(x: 260, y: 306))
+        stroke(app, from: CGPoint(x: 60, y: 340), to: CGPoint(x: 200, y: 346))
+        app.buttons["tutor"].tap()
+        let readAs = app.buttons["tutorReadAs"]
+        XCTAssertTrue(readAs.waitForExistence(timeout: 30), "no note for the paragraph")
+        XCTAssertEqual(readAs.label, "I read: The Civil War started because of taxes in 1861.")
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "&Co · hint 1 of 4")
+        let message = app.staticTexts["tutorMessage"]
+        XCTAssertTrue(message.label.contains("main reason"), message.label)
+        XCTAssertFalse(message.label.contains("You could write"), "the guard should have rejected the rewrite")
+        XCTAssertNotEqual(message.value as? String, "Marked on your page", "a big-picture question points at nothing in particular")
+        shot("writing-1-first-question")
+
+        // A typed reply is a message (nothing to check); Another hint climbs the ladder.
+        app.buttons["tutorReplyType"].tap()
+        let field = app.textFields["tutorReplyField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.typeText("because the South wanted slavery\n")
+        XCTAssertTrue(waitLabel(app.buttons["tutorEarlier"]) { $0.contains("2 earlier") })
+        app.buttons["tutorReplyType"].tap()
+        let hint = app.buttons["tutorTypeHint"]
+        XCTAssertTrue(hint.waitForExistence(timeout: 5))
+        hint.tap()
+        XCTAssertTrue(waitLabel(app.staticTexts["tutorHeader"]) { $0 == "&Co · hint 2 of 4" })
+        XCTAssertTrue(message.label.contains("because of taxes"), message.label)
+        // It quotes their words, so those words are lit up on the page.
+        XCTAssertEqual(message.value as? String, "Marked on your page")
+        shot("writing-2-next-hint")
+    }
+
     /// Nothing readable: a note at the problem that stays (not a toast), offering to rewrite or type it.
     /// Rewriting it in the highlighted space reads it again and starts the session in the same note.
     @MainActor
@@ -267,7 +306,7 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(message.waitForExistence(timeout: 30), "no note for an unreadable problem")
         if !message.label.contains("couldn't read") { debugDump(app, "unread-note") }
         XCTAssertTrue(message.label.contains("couldn't read"), message.label)
-        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "Pip")
+        XCTAssertEqual(app.staticTexts["tutorHeader"].label, "&Co")
         XCTAssertFalse(app.buttons["tutorReadAs"].exists)
         XCTAssertEqual(app.buttons["tutorReplyWrite"].label, "Rewrite it")
         XCTAssertEqual(app.buttons["tutorReplyType"].label, "Type it")
@@ -288,7 +327,7 @@ final class TutorFlowShot: XCTestCase {
         app.buttons["tutorReplyWrite"].tap()
         let zone = app.otherElements["tutorWriteZone"]
         XCTAssertTrue(zone.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["tutorWriteHint"].label.contains("Write the problem again"))
+        XCTAssertTrue(app.staticTexts["tutorWriteHint"].label.contains("Write it again"))
         let z = zone.frame
         stroke(app, from: CGPoint(x: z.minX + 30, y: z.midY + 10), to: CGPoint(x: z.minX + 150, y: z.midY + 16))
         let readAs = app.buttons["tutorReadAs"]

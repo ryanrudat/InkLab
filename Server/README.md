@@ -94,6 +94,10 @@ Attest) + rate limiting are still pre-ship items.
   results the engine says must never be handed over (`expression` / `equation` / `antiderivative`, in the
   app's ASCII grammar), and the conversation so far (`{ role: 'tutor' | 'student', text, check?,
   wantsHint?, question? }`, replayed every turn: the proxy is stateless). Returns `{ reply, rung, guard }`.
+  With `mode: "writing"` (English / History, `src/writingTutor.ts`) the body is just `{ session, mode,
+  lines, thread, strict? }`: the writing as read, one handwritten line each, and the conversation. No
+  checker; drafts that write it for the student or supply a fact are rejected (regenerate once, then a
+  fixed question).
   Replies are one or two sentences with exactly one question (≤ 280 chars, enforced; generic opening
   praise is dropped).
   Consent gate first. The **hint rung** (1 nudge → 2 question about the line → 3 concept → 4 worked
@@ -139,6 +143,8 @@ readable) and `{}` restores the default; the tutor UI tests use it for the misre
   on-device WKWebView CSP is the real boundary.
 - `recognize.ts` — orchestration (gate → prompt → call → validate).
 - `tutor.ts` — `/tutor` validation, hint ladder, prompt, draft review, fallback hints.
+- `writingTutor.ts` — `/tutor` with `mode: "writing"`: &Co on English and History (prompt, the
+  "never write it for them / never supply a fact" review, fallback questions).
 - `mathGuard.ts` — the answer-leak guard: an expression parser matching InkLabMath's grammar, numeric
   equivalence, symbolic d/dx, and extraction of the math in a prose reply.
 - `anthropic.ts` — the real HTTP client behind the `AnthropicClient` interface (mocked in tests).

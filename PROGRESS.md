@@ -55,7 +55,7 @@ a model.
 - **Finished is not fixed (fix from a live run):** a reply that finishes an unfinished line ("1+3=" then
   "4") is described to the model as finishing it, not correcting it ("Nothing was wrong with that line"),
   and the prompt says to acknowledge it as "1 + 3 = 4 checks out". With only finished lines, a draft that
-  says "fix" or "correction" is rejected. Once the working checks out, the note's header says "Pip ·
+  says "fix" or "correction" is rejected. Once the working checks out, the note's header says "&Co ·
   your working checks out" instead of counting hints.
 - **What was read (fix from a live run):** a hooked "1" read as "7+3=" got coached as 7 + 3, with no way
   to tell. The note now starts with a quiet **"I read: 7+3= ✎"** line (all lines, "·" between them, at
@@ -77,10 +77,39 @@ a model.
   away; if the on-screen keyboard would cover it, the page scrolls it into view. Any math
   in a reply is **checked by the red pen** in context ("You: 2x = 4 ✓ checks out"); a verified step
   replaces the wrong line. Prose is just a message.
-- **Pip:** the tutor has a name. The note's header reads "Pip · hint 1 of 4", Pip's earlier messages in
-  the thread read "Pip: …", and status lines say "Pip is thinking…". What Pip says is in its own color,
-  atomic-age turquoise (`Theme.pip`, 5.3:1 on the light note, 8:1 on the dark one), so it never reads
-  like the student's writing or the orange chrome. One constant (`TutorSession.tutorName`) holds the name.
+- **&Co on English and History (2026-11-14):** lasso a paragraph, an answer or notes and tap Tutor. A
+  reading that is prose (`TutorSession.looksLikeWriting`: four or more words and no line that reads as a
+  step of working; a year like "1861" doesn't make it math) starts a writing session (`mode: .writing`,
+  saved in the note; older notes decode as math). No red pen: the note shows "I read: …" as one passage,
+  replies are messages, and the request carries only the passage and the thread. On the proxy,
+  `writingTutor.ts` has its own ladder (big picture → one of their sentences → the skill → the skill on a
+  different everyday topic) and rejects drafts that write it for them or supply a fact. Live with Opus 5.5:
+  prose in handwriting-style fonts read cleanly with the tutor's math hint; a wrong date (Columbus "in
+  1592") was questioned ("where did you find that date?") without the right one being given; "write a
+  better sentence for me" was declined; a word problem was asked for its working. 104 server tests, 59 app
+  unit tests, 5 tutor UI tests.
+- **&Co (renamed from Pip, 2026-11-15):** the tutor has a name. The note's header reads "&Co · hint 1 of 4",
+  its earlier messages in the thread read "&Co: …", and status lines say "&Co is thinking…". What &Co says
+  is in its own color, atomic-age turquoise (`Theme.tutorVoice`, 5.3:1 on the light note, 8:1 on the dark
+  one), so it never reads like the student's writing or the orange chrome. One constant
+  (`TutorSession.tutorName`) holds the name; both proxy prompts introduce it as "&Co".
+- **Reading the strokes, not a rectangle (2026-11-15):** Tutor and Check read exactly the strokes the lasso
+  caught, or with no lasso the piece of writing done last among what's on screen
+  (`InkGeometry.latestBlock`: strokes grouped by gaps measured in letter heights, keeping a problem's
+  working together even with a line left between steps); Recognize reads the lassoed strokes or the whole
+  page. Only those strokes are rasterized, so nearby ink inside the old bounding rectangle is never read.
+  Lines come from the ink (`InkGeometry.lines`: extra bands merge, missing ones split, dots join their
+  line) instead of an even split, and words from the gaps along a line.
+- **Pointing at what you wrote (2026-11-15):** when a message quotes the student's words or names a line,
+  `TutorFocus` finds that ink (the matching word when a line splits into as many words as were read, else
+  where those letters fall along the line, widened to whole words) and the note lights it up — a marker
+  band with a sun underline drawn left to right — with its connector going there (`TutorSession.focus`,
+  saved with the note). The writing prompt now asks &Co to quote two to eight of the student's exact words
+  whenever it means a particular part.
+- **The reading light (2026-11-15):** `InkScanView` replaces the rectangle sweep: a soft sun glow on the
+  strokes being read and a bright trace running along them in writing order, in the desert palette with the
+  "Designing" card's easing; still under Reduce Motion. 104 server tests, 68 app unit tests, 5 tutor UI
+  tests.
 - **On the page (layout A, the margin note):** one note per session in the right margin, level with the
   line the verdict is about, with a thin connector to that line, placed right of all ink and objects in its
   band so it **never covers the student's writing or another object** (a widget's controls, a sticky), and
