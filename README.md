@@ -20,7 +20,7 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
 all have working, tested cores. **149 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **79 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+`InkLabKit` umbrella), plus **85 app unit tests + UI tests** (the iPad target), plus a **TypeScript
 backend proxy** (`Server/`, **104 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
 (hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
@@ -65,9 +65,10 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   Claude reads it correctly). A "Read as…" review sheet shows the editable transcription + engine chips;
   lasso-region recognition reads just the selected area.
 - **Handwritten `@`, tap to make** — handwrite "@…", pause ~1.5s, and the new strokes are read (Vision
-  first; "@-shaped" misreads are re-checked by Claude with AI consent). Nothing runs on its own: a sun
-  chip appears beside the writing ("✦ Make “a clock”"); tap it to make it, or keep writing and it goes
-  (it also fades after ~12s). An "@" counts only at the start of a line or after a space, so an email
+  first; "@-shaped" misreads are re-checked by Claude with AI consent; a pause mid-command is fine, since
+  each pause re-reads the line written in the last minute). Nothing runs on its own: a sun chip appears just
+  above the writing ("✦ Make “a clock”"); tap it to make it, or keep writing and it goes (it also fades
+  after ~12s). An "@" counts only at the start of a line or after a space, so an email
   address in your notes never triggers it. Ink is never erased. Settings toggle "Suggest “@” commands
   while you write" (default on); the `@` bar always works.
 - **Deterministic engines (COMPUTE)** via the `@`-command bar: `@balance`, `@molar`, `@units`,
@@ -75,7 +76,8 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
 - **Socratic tutor** — write a problem + your working and tap **Tutor** (lasso menu, or its own
   graduation-cap button in the dock). With no lasso it reads the piece of writing you did last among what's
   on screen; with one, exactly the strokes the lasso caught (never other ink inside a rectangle round
-  them). While it reads, a sun-coloured light traces along those strokes in the order you wrote them. The red pen
+  them). What's left of a word you rubbed out (the few lines the eraser missed) is never read, by the tutor,
+  Check, Recognize or the "@" scan. While it reads, a sun-coloured light traces along those strokes in the order you wrote them. The red pen
   (`checkChain`) decides what's wrong; the proxy's `POST /tutor` (Claude Opus 5.5, low effort) only talks,
   one rung of a hint ladder at a time (nudge → question about the line → concept → worked example of a
   *different* problem), climbing only when the student asks. Every reply passes an **answer-leak guard**

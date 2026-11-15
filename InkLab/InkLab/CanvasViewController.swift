@@ -47,6 +47,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private var allowsFingerDrawing = true
     /// "Make “…”" chips for "@" commands just written (see `suggestAtCommands`).
     private var atSuggestions: [AtCommandChip] = []
+    /// When a suggested command was last made: ink written before then is never read as a command again.
+    private var atMadeAt: Date?
     /// Bounding box of the most recent lasso, so Recognize can read just that selection (cleared when
     /// new ink is drawn).
     private var lastLassoRect: CGRect?
@@ -392,6 +394,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     }
 
     func performRedo() {
+        dismissAtSuggestions()
         guard let step = redoSteps.popLast() else { return }
         applyHistoryStep(step, redo: true)
         undoSteps.append(step)
@@ -442,9 +445,11 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// Set the canvas drawing ourselves (undo/redo) WITHOUT the change being recorded as a new step.
     private func restoreDrawing(_ drawing: PKDrawing) {
+        // Keep the auto-scan in step: ink an undo/redo brings back was read before, never new writing.
+        consumedStrokeCount = Self.examinedCountAfterChange(old: lastDrawing.strokes, new: drawing.strokes,
+                                                            examined: consumedStrokeCount)
         setCanvasDrawing(drawing)
         lastDrawing = drawing
-        consumedStrokeCount = min(consumedStrokeCount, drawing.strokes.count)   // keep auto-scan in sync
     }
 
     /// Assign `canvasView.drawing` programmatically (undo/redo, shape-snap, page load, ink restore)
@@ -484,7 +489,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// Content-signature of a single stroke, so a stroke PencilKit re-introduces via a stale render can be
     /// recognised and dropped regardless of its index. Hashes the stroke's actual geometry (every control
-    /// point's location/timing/pressure/tilt), transform, and ink — NOT `dataRepresentation()`, which is
+    /// point's location/timing/pressure/tilt), transform, ink and eraser mask — NOT `dataRepresentation()`, which is
     /// NOT byte-deterministic for identical content (verified: two serializations of the same stroke
     /// differ), so it cannot be used as an identity. `Hasher` is process-stable, which is all we need: the
     /// signature is captured (on removal) and checked (on a reappearance) within the same process. A
@@ -500,6 +505,13 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             h.combine(p.location.x); h.combine(p.location.y); h.combine(p.timeOffset)
             h.combine(p.size.width); h.combine(p.size.height)
             h.combine(p.opacity); h.combine(p.force); h.combine(p.azimuth); h.combine(p.altitude)
+        }
+        // What the pixel eraser left showing: it keeps the whole path and changes only the mask, so without
+        // this a trimmed stroke would look unchanged (and that erase would never be saved or undoable).
+        if let mask = stroke.mask {
+            let b = mask.bounds
+            for v in [b.minX, b.minY, b.width, b.height] { h.combine(v) }
+            for r in stroke.maskedPathRanges { h.combine(r.lowerBound); h.combine(r.upperBound) }
         }
         return h.finalize()
     }
@@ -525,6 +537,17 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         guard !removed.isEmpty, live.count > baselineCount else { return (live, false) }
         let kept = live.filter { !removed.contains(strokeSignature($0)) }
         return kept.count == live.count ? (live, false) : (kept, true)
+    }
+
+    /// How many strokes from the front the auto-scan has read, after a change that wasn't writing: the eraser
+    /// (it keeps strokes in order but cuts some in pieces and drops others) or an undo/redo. The old count no
+    /// longer lines up, and counted as before, the last strokes on the page would be read again as if just
+    /// written. Strokes not yet read are found again by their content; pieces the eraser left of them, and
+    /// strokes an undo/redo put back, aren't new writing.
+    nonisolated static func examinedCountAfterChange(old: [PKStroke], new: [PKStroke], examined: Int) -> Int {
+        guard examined < old.count else { return new.count }
+        let waiting = Set(old[max(0, examined)...].map(strokeSignature))
+        return new.firstIndex { waiting.contains(strokeSignature($0)) } ?? new.count
     }
 
     /// Re-write the canvas with a drawing WE corrected (stale-render fix), WITHOUT recording a step and
@@ -622,15 +645,20 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     /// The ink a read is about, as the strokes themselves rather than a rectangle round them: exactly what
     /// the lasso caught; else, when `latestOnScreen`, the piece of writing done last among what's on screen
-    /// (see `InkGeometry.latestBlock`); else the whole page.
+    /// (see `InkGeometry.latestBlock`); else the whole page. Never what's left of writing the student erased
+    /// (see `InkGeometry.eraseLeftovers`): a few half-rubbed-out lines are still enough to read a word from.
     private func inkToRead(latestOnScreen: Bool) -> PKDrawing {
         let drawing = canvasView.drawing
+        let leftovers = PencilKitAdapters.eraseLeftovers(drawing.strokes)
         let lassoed = selectedStrokeIndices.filter { drawing.strokes.indices.contains($0) }
-        if !lassoed.isEmpty { return PKDrawing(strokes: lassoed.map { drawing.strokes[$0] }) }
-        guard latestOnScreen else { return drawing }
+        if !lassoed.isEmpty { return PKDrawing(strokes: lassoed.filter { !leftovers.contains($0) }.map { drawing.strokes[$0] }) }
+        guard latestOnScreen else {
+            return PKDrawing(strokes: drawing.strokes.indices.filter { !leftovers.contains($0) }.map { drawing.strokes[$0] })
+        }
         var visible = canvasView.bounds                                    // content coordinates
         visible.size.height = max(1, visible.height - canvasView.contentInset.bottom)   // not under the keyboard
-        let block = InkGeometry.latestBlock(strokes: drawing.strokes.map(\.renderBounds), visible: visible)
+        let writing = drawing.strokes.enumerated().map { leftovers.contains($0.offset) ? CGRect.null : $0.element.renderBounds }
+        let block = InkGeometry.latestBlock(strokes: writing, visible: visible)
         return PKDrawing(strokes: block.map { drawing.strokes[$0] })
     }
 
@@ -659,7 +687,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false)
         )
         onStatus?("Reading…")
-        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
+        overlay.showScan(strokes: ink.strokes.flatMap(PencilKitAdapters.tracePaths))
         let originPage = store.pageID    // tag any result to the page the recognize was started on
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -719,7 +747,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             domainHint: .math,
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         onStatus?("Checking…")
-        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
+        overlay.showScan(strokes: ink.strokes.flatMap(PencilKitAdapters.tracePaths))
         let originPage = store.pageID    // tag the verdict to the page being checked
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -761,7 +789,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         consumedStrokeCount = drawing.strokes.count
         clearLassoSelection()
         onStatus?("Reading your writing…")
-        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
+        overlay.showScan(strokes: ink.strokes.flatMap(PencilKitAdapters.tracePaths))
         let originPage = store.pageID
         startTrackedTask { [weak self] in
             guard let self else { return }
@@ -800,7 +828,13 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             guard !Task.isCancelled, !self.isDismissing, self.store.pageID == page else { return }
             self.consumedStrokeCount = firedCount   // examined — never re-read (the ink stays on the page)
             guard !read.isEmpty else { self.onStatus?("Couldn't read your reply — try writing a little larger."); return }
-            if read.hasPrefix("@") { self.runInkCommand(read, onPage: page); return }
+            // An "@" command written by a note is still a command — offered as a chip like any other, never run.
+            let commands = Self.extractAtCommands(read)
+            if read.hasPrefix("@"), !commands.isEmpty {
+                let r = input.region
+                self.suggestAtCommands(commands, near: CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: 12, dy: 12), page: page)
+                return
+            }
             if self.tutorWriteZone?.session == sessionID { self.closeTutorWriteZone() }
             self.sendTutorReply(sessionID: sessionID, text: read, wantsHint: false, page: page)
         }
@@ -871,7 +905,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private func rereadTutorProblem(_ session: TutorSession, newInk: CGRect, firedCount: Int, page: UUID) {
         let drawing = canvasView.drawing
         let region = (newInk.intersects(session.problem) ? session.problem.union(newInk) : newInk).insetBy(dx: -12, dy: -12)
-        let ink = PKDrawing(strokes: drawing.strokes.filter { $0.renderBounds.intersects(region) })
+        let ink = PencilKitAdapters.readable(PKDrawing(strokes: drawing.strokes.filter { $0.renderBounds.intersects(region) }))
         guard !ink.strokes.isEmpty, region.width > 1, region.height > 1,
               let raster = PencilKitAdapters.raster(ink, region: region) else { consumedStrokeCount = firedCount; return }
         let input = RecognitionInput(
@@ -881,7 +915,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         autoScanBusy = true
         onStatus?("Reading your writing…")
-        overlay.showScan(strokes: ink.strokes.map(PencilKitAdapters.tracePoints))
+        overlay.showScan(strokes: ink.strokes.flatMap(PencilKitAdapters.tracePaths))
         startTrackedTask { [weak self] in
             guard let self else { return }
             defer {
@@ -1092,8 +1126,18 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // its base is still stale). A CLEAN edit proves the base settled, so we disarm to keep the fast
         // path fast.
         if stripped { reassertDrawing(authoritative) }
+        // The eraser cuts strokes in pieces and drops others, which shifts the count the auto-scan keeps of
+        // what it has read: find where that now ends, so old writing is never read again as new.
+        if currentTool == .eraser {
+            consumedStrokeCount = Self.examinedCountAfterChange(old: lastDrawing.strokes, new: authoritative.strokes,
+                                                                examined: consumedStrokeCount)
+        }
         let addedStroke = authoritative.strokes.count > lastDrawing.strokes.count
         clearLassoSelection()   // new ink invalidates any prior lasso selection
+        // Writing on means "not now": a finished stroke takes an "@" suggestion away (the next pause offers it
+        // again if the stroke carried on the command). Only a finished stroke: a resting palm the iPad rejects
+        // never finishes one, so it can't make the chip vanish.
+        if addedStroke || currentTool == .eraser, !atSuggestions.isEmpty { dismissAtSuggestions() }   // rubbing out too
         // Record this handwriting change as ONE back/forward step, interleaved with object ops, so the
         // toolbar undo/redo steps to the exact previous/next thing the user made — ink included.
         recordStep(.ink(before: lastDrawing, after: authoritative))
@@ -1186,7 +1230,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         let strokes = canvasView.drawing.strokes
         consumedStrokeCount = min(consumedStrokeCount, strokes.count)   // resync if ink was erased
         guard strokes.count > consumedStrokeCount else { return }
-        let newStrokes = Array(strokes[consumedStrokeCount..<strokes.count])
+        // Only what was written since: a piece the eraser cut from a stroke is never new writing.
+        let newStrokes = strokes[consumedStrokeCount...].filter { $0.mask == nil }
+        guard !newStrokes.isEmpty else { consumedStrokeCount = strokes.count; return }
         // Skip very large batches (long-form notes); a page with several "@" commands can still be many
         // strokes, so the cap is generous — we want to catch every command, not just the first one or two.
         guard newStrokes.count <= 200 else { consumedStrokeCount = strokes.count; return }
@@ -1206,13 +1252,16 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         )
         let firedCount = strokes.count
         let scanPage = store.pageID            // the page these strokes belong to
+        // What was already there, less what's left of erased writing (it's no one's problem or command).
+        let leftovers = PencilKitAdapters.eraseLeftovers(strokes)
+        let oldInk = (0..<consumedStrokeCount).map { leftovers.contains($0) ? CGRect.null : strokes[$0].renderBounds }
         // Ink in the highlighted write-here space is that session's reply; otherwise new ink that joins a
         // session's problem as one piece of writing (or sits right by its note) is. By a note that couldn't
         // read its problem, it's the problem written again. Writing that starts a piece of its own (a new
         // problem lower on the page) is left for Tutor or the "@" scan, like any other ink.
         let zone = tutorWriteZone.flatMap { $0.page == scanPage ? (session: $0.session, rect: $0.rect) : nil }
         let targetID = TutorLayout.replyTarget(
-            newInk: newStrokes.map(\.renderBounds), oldInk: strokes[..<consumedStrokeCount].map(\.renderBounds),
+            newInk: newStrokes.map(\.renderBounds), oldInk: oldInk,
             sessions: tutorSessions.map {
                 TutorLayout.ReplyCandidate(id: $0.latest.provenance.tutor.id, problem: $0.latest.provenance.tutor.problem,
                                            notes: $0.all.map(\.frame))
@@ -1225,8 +1274,26 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             return
         }
         guard autoCommandsEnabled else { consumedStrokeCount = strokes.count; return }
+        // Writing that carries on along a line is read together with what was written on that line in the
+        // last minute, so a pause in the middle of a command never splits it: "@" … pause … "a clock". (On
+        // its own a handwritten "@" reads as anything from nothing to "•", seen live: it can't be judged alone.)
+        let since = max(Date().addingTimeInterval(-Self.atLineMemory), atMadeAt ?? .distantPast)
+        let recent = (0..<consumedStrokeCount).filter { strokes[$0].path.creationDate > since && !leftovers.contains($0) }
+        let lineMates = InkGeometry.lineMates(recent.map { strokes[$0].renderBounds }, of: newStrokes.map(\.renderBounds))
+            .map { recent[$0] }
+        let commandInk = lineMates.isEmpty ? batch : PKDrawing(strokes: lineMates.map { strokes[$0] } + newStrokes)
+        let commandRegion = commandInk.bounds.insetBy(dx: -12, dy: -12)
+        guard let commandRaster = lineMates.isEmpty ? raster : PencilKitAdapters.raster(commandInk, region: commandRegion) else {
+            consumedStrokeCount = strokes.count; return
+        }
+        let commandInput = lineMates.isEmpty ? input : RecognitionInput(
+            strokes: PencilKitAdapters.strokes(commandInk), raster: commandRaster,
+            region: Rect(x: Double(commandRegion.minX), y: Double(commandRegion.minY),
+                         width: Double(commandRegion.width), height: Double(commandRegion.height)),
+            domainHint: .text,
+            session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         autoScanBusy = true
-        let inkBounds = batch.bounds
+        let inkBounds = commandInk.bounds
         startTrackedTask { [weak self] in
             guard let self else { return }
             defer {
@@ -1237,15 +1304,15 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                 }
             }
             // On-device first (free, private). Every "@" command found is suggested — several per page work.
-            var read = (try? await self.recognizer.recognize(input))?.readAs ?? ""
+            var read = (try? await self.recognizer.recognize(commandInput))?.readAs ?? ""
             guard !Task.isCancelled, !self.isDismissing else { return }
             var commands = Self.extractAtCommands(read)
-            // Apple Vision misreads a handwritten "@" (often as "a"). If none were found but the scribble
-            // is short and "@-shaped", re-check with the cloud recognizer — but ONLY with AI consent
+            // Apple Vision misreads a handwritten "@" (as "a", "o", "•" …). If none were found but the writing
+            // is short and starts "@-shaped", re-check with the cloud recognizer — but ONLY with AI consent
             // (so ordinary notes never go to the cloud). This is the only cloud call the auto-scan makes.
             if commands.isEmpty, self.makeRealSession.blockReason == nil, Self.looksLikeAtScribble(read) {
                 self.cloudRecognizer.session = self.makeRealSession
-                if let cloud = try? await self.cloudRecognizer.recognize(input) {
+                if let cloud = try? await self.cloudRecognizer.recognize(commandInput) {
                     read = cloud.readAs
                     commands = Self.extractAtCommands(read)
                 }
@@ -1256,14 +1323,18 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             // and will be re-scanned (and suggested once) when the user returns to it.
             guard self.store.pageID == scanPage else { return }
             self.consumedStrokeCount = firedCount   // examined — never re-scan these strokes (keep the ink)
-            // Nothing runs from ink on its own: each command waits as a chip beside the writing.
+            // Nothing runs from ink on its own: each command waits as a chip by the writing.
             if !commands.isEmpty { self.suggestAtCommands(commands, near: inkBounds, page: scanPage) }
+            else { self.dismissAtSuggestions() }   // wrote on, and it isn't a command: the suggestion goes
         }
     }
 
+    /// How far back writing on the same line still counts as part of what is being written now.
+    static let atLineMemory: TimeInterval = 60
+
     // MARK: - "@" suggestions (tap to make)
 
-    /// Show a "Make “…”" chip beside the writing for each command, replacing any still showing. Tapping one
+    /// Show a "Make “…”" chip by the writing for each command, replacing any still showing. Tapping one
     /// runs it (and clears the rest); writing on, switching pages or waiting lets them go.
     private func suggestAtCommands(_ commands: [String], near ink: CGRect, page: UUID) {
         dismissAtSuggestions(animated: false)
@@ -1274,6 +1345,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             chip.onMake = { [weak self, weak chip] in
                 guard let self, let chip else { return }
                 self.dismissAtSuggestions()
+                self.atMadeAt = Date()
                 self.runInkCommand(chip.command, onPage: chip.pageID)
             }
             overlay.addSubview(chip)
@@ -1288,11 +1360,6 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private func dismissAtSuggestions(animated: Bool = true) {
         for chip in atSuggestions { chip.dismiss(animated: animated) }
         atSuggestions = []
-    }
-
-    /// Writing on means "no": the suggestions go as soon as a new stroke starts.
-    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
-        if !atSuggestions.isEmpty { dismissAtSuggestions() }
     }
 
     /// Pull EVERY "@…" command out of recognized text. Handles multiple per page/line, e.g.
@@ -1319,8 +1386,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// as a round glyph). Narrow, and used ONLY to decide a consent-gated cloud re-check — not to run.
     private static func looksLikeAtScribble(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.count <= 20, let c = t.lowercased().first else { return false }
-        return "aoecqg09(".contains(c)
+        guard t.count <= 40, let c = t.lowercased().first else { return false }
+        return "aoecqg09(•©*".contains(c)
     }
 
     @discardableResult

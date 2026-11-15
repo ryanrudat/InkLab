@@ -59,6 +59,35 @@ enum InkGeometry {
         return [last]
     }
 
+    /// `r` sits on the same line of writing as `line`: overlapping its band, and not far off along it.
+    static func onSameLine(_ r: CGRect, as line: [CGRect]) -> Bool {
+        let line = line.filter { !$0.isNull }
+        guard !r.isNull, let first = line.first else { return false }
+        let band = line.dropFirst().reduce(first) { $0.union($1) }
+        let overlap = min(r.maxY, band.maxY) - max(r.minY, band.minY)
+        guard overlap > 0.5 * min(max(r.height, 1), max(band.height, 1)) else { return false }
+        let gap = max(band.minX - r.maxX, r.minX - band.maxX, 0)
+        return gap <= 4 * letterHeight(line + [r])
+    }
+
+    /// Which of `candidates` belong to the same line of writing as `new` (indices into `candidates`), found
+    /// word by word along the line, so a long command written in pieces stays one line.
+    static func lineMates(_ candidates: [CGRect], of new: [CGRect]) -> [Int] {
+        var line = new.filter { !$0.isNull }
+        guard !line.isEmpty else { return [] }
+        var picked: [Int] = []
+        var left = Array(candidates.indices)
+        var grew = true
+        while grew {
+            grew = false
+            for i in left where onSameLine(candidates[i], as: line) {
+                picked.append(i); line.append(candidates[i]); grew = true
+            }
+            left.removeAll { picked.contains($0) }
+        }
+        return picked.sorted()
+    }
+
     /// The lines of writing, top to bottom: strokes that share a line are merged into one band. Dots, commas
     /// and other specks join the line they sit on instead of becoming lines of their own.
     static func rows(_ strokes: [CGRect]) -> [CGRect] {
@@ -123,6 +152,65 @@ enum InkGeometry {
     /// The strokes that sit on `line` (their middle inside its band).
     static func strokes(_ strokes: [CGRect], on line: CGRect) -> [CGRect] {
         strokes.filter { !$0.isNull && $0.midY >= line.minY && $0.midY <= line.maxY && $0.maxX >= line.minX && $0.minX <= line.maxX }
+    }
+
+    /// One stroke on the page as the eraser left it. The pixel eraser hides the part it rubs out and can cut a
+    /// stroke in pieces; the pieces of one stroke share `stroke`.
+    struct InkPiece: Equatable {
+        /// What still shows.
+        var bounds: CGRect
+        /// The whole stroke before any erasing (`bounds` when it was never touched).
+        var whole: CGRect
+        /// How much of the stroke is left, 0...1 over all its pieces (1 when it was never touched).
+        var shown: CGFloat
+        var stroke: Int
+        var written: Date
+    }
+
+    /// What's left of writing the student rubbed out, which is never read as writing: a stroke the eraser
+    /// took most of, and the rest of a word it took most of, including any strokes it missed altogether
+    /// (they were written with that word, within a moment of it). Writing done later on the same spot, a
+    /// word that only lost a letter, and a stroke trimmed at its end all still count.
+    static func eraseLeftovers(_ pieces: [InkPiece]) -> Set<Int> {
+        let rubbed = { (i: Int) in pieces[i].shown < 0.6 }
+        var out = Set(pieces.indices.filter { pieces[$0].shown < 0.5 })
+        guard pieces.indices.contains(where: rubbed) else { return out }
+        for word in wordGroups(pieces.map(\.whole)) where word.contains(where: rubbed) {
+            let times = word.filter(rubbed).map { pieces[$0].written }
+            let span = times.min()!.addingTimeInterval(-2.5)...times.max()!.addingTimeInterval(2.5)
+            let erasedWord = word.filter { rubbed($0) || span.contains(pieces[$0].written) }
+            let strokes = Set(erasedWord.map { pieces[$0].stroke })
+            let rubbedStrokes = Set(erasedWord.filter(rubbed).map { pieces[$0].stroke })
+            if 2 * rubbedStrokes.count > strokes.count { out.formUnion(erasedWord) }
+        }
+        return out
+    }
+
+    /// The strokes grouped into words (indices): on one line, closer together than a letter's height (a word
+    /// space, or the gap one letter the eraser took altogether leaves in a word).
+    static func wordGroups(_ strokes: [CGRect]) -> [[Int]] {
+        let valid = strokes.indices.filter { !strokes[$0].isNull }
+        let h = letterHeight(strokes)
+        var parent = Array(strokes.indices)
+        func root(_ i: Int) -> Int {
+            var i = i
+            while parent[i] != i { parent[i] = parent[parent[i]]; i = parent[i] }
+            return i
+        }
+        let order = valid.sorted { strokes[$0].minX < strokes[$1].minX }
+        for (k, i) in order.enumerated() {
+            for j in order[(k + 1)...] {
+                let a = strokes[i], b = strokes[j]
+                if b.minX - a.maxX >= h { break }                // sorted by left edge: the rest are further
+                let overlap = min(a.maxY, b.maxY) - max(a.minY, b.minY)
+                guard overlap > 0.3 * min(max(a.height, 1), max(b.height, 1)) else { continue }
+                let ra = root(i), rb = root(j)
+                if ra != rb { parent[ra] = rb }
+            }
+        }
+        var groups: [Int: [Int]] = [:]
+        for i in valid { groups[root(i), default: []].append(i) }
+        return groups.values.map { $0.sorted() }.sorted { $0[0] < $1[0] }
     }
 }
 

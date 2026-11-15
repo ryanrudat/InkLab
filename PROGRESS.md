@@ -24,6 +24,36 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
   and Recognize (an explicit tap) still run a command straight away.
 - Checked on the iPad simulator with ink: "@a clock" got a "Make “aclock”" chip (the reading joined the
   words, which the chip now shows before anything is made); a new stroke cleared it. 79 app unit tests.
+- **Fix: written at a normal pace it never showed (2026-11-15).** Two causes, both seen live:
+  - *A pause after the "@" split the command.* On its own a handwritten "@" reads as nothing or "•", so the
+    scan dropped it and "a clock" was read without it. Now each pause reads the new ink together with what
+    was written on the same line in the last minute (`InkGeometry.lineMates`, word by word along the line,
+    using each stroke's `creationDate`); ink before the last made command is never re-read. Verified with
+    a log: "@" alone read "", then "a clock" → `mates=1`, read "@a clock" → chip.
+  - *A resting hand closed the chip at once.* It closed when any stroke began, and a resting palm begins
+    one. It now closes only when a stroke is finished (a palm the iPad rejects never finishes), and it sits
+    just above the end of the writing so the next words along the line never land on it.
+  - The consent-gated cloud re-check also covers a read starting "•", "©" or "*" (up to 40 characters).
+    80 app unit tests.
+
+### 🧽 Erased writing is never read (2026-11-15)
+- **Reported:** the tutor read a word that had been rubbed out, with a few lines the eraser hadn't quite got.
+  The pixel eraser keeps a stroke's whole path and hides what it rubs out with a mask, cutting the stroke
+  into pieces that share that path (seen live on the simulator: `maskedPathRanges` is what still shows).
+- `InkGeometry.eraseLeftovers` (from `PencilKitAdapters.inkPieces`): a stroke with less than half of it left
+  is a leftover, and so is the rest of a word that lost most of its strokes, including strokes the eraser
+  missed altogether, as long as they were written with that word (within 2.5 s). Writing done later on the
+  same spot, a word that only lost a letter, and a stroke trimmed at its end still count. Tutor, Check,
+  Recognize, the tutor's re-read and the "@" scan all leave leftovers out; the scan light and the lasso
+  only follow what still shows.
+- **Erasing no longer makes old ink look new.** The auto-scan counted read strokes from the front, so an
+  erase that cut strokes in pieces pushed the last strokes on the page past that count, and they were read
+  again (as a tutor reply, or an "@" command). `examinedCountAfterChange` finds where the read strokes end
+  after an erase or undo/redo, and pieces the eraser left are never new writing.
+- **An erase that only trimmed strokes is now saved and undoable.** `strokeSignature` ignored the mask, so a
+  trim (same strokes, same count) looked like no change at all.
+- Checked on the simulator: one eraser pass across "clock" in "@ a clock" left the bottoms of its letters;
+  all six pieces were found as leftovers and "@ a" was kept. 85 app unit tests, TutorFlowShot 5/5.
 
 ### 🎓 Socratic tutor (2026-11-12)
 A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to

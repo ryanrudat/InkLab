@@ -14,16 +14,34 @@ struct AtCommandChipTests {
         #expect(AtCommandChip.width(for: long) <= AtCommandChip.maxWidth)
     }
 
-    @Test func chipsSitBesideTheWritingOrUnderItWhenTheresNoRoom() {
+    @Test func chipsSitAboveTheEndOfTheWritingSoTheNextWordsNeverLandOnOne() {
         let ink = CGRect(x: 100, y: 300, width: 160, height: 40)
-        let beside = AtCommandChip.frames(widths: [150, 120], near: ink, canvasWidth: 820)
-        #expect(beside[0] == CGRect(x: 272, y: 300, width: 150, height: AtCommandChip.height))
-        #expect(beside[1].minY == beside[0].maxY + 8 && beside[1].minX == 272)
-        // Writing near the right edge: the chips go under it instead, still on the page.
-        let edge = CGRect(x: 600, y: 300, width: 180, height: 40)
-        let under = AtCommandChip.frames(widths: [200], near: edge, canvasWidth: 820)
-        #expect(under[0].minY == edge.maxY + 8)
-        #expect(under[0].maxX <= 812 && under[0].minX >= 8)
+        let above = AtCommandChip.frames(widths: [150, 120], near: ink, canvasWidth: 820)
+        #expect(above[0] == CGRect(x: 110, y: 216, width: 150, height: AtCommandChip.height))   // right edge = end of the ink
+        #expect(above[1] == CGRect(x: 140, y: 258, width: 120, height: AtCommandChip.height))
+        #expect(above.allSatisfy { $0.maxY <= ink.minY })
+        // At the top of the page there's no room above: under the writing instead.
+        let top = CGRect(x: 100, y: 20, width: 160, height: 40)
+        #expect(AtCommandChip.frames(widths: [150], near: top, canvasWidth: 820)[0].minY == top.maxY + 6)
+        // Never off the page.
+        let edge = AtCommandChip.frames(widths: [300], near: CGRect(x: 0, y: 300, width: 40, height: 40), canvasWidth: 820)[0]
+        #expect(edge.minX >= 8 && edge.maxX <= 812)
+    }
+
+    /// Written at a normal pace, a command arrives in pieces ("@" … pause … "a clock"): what was just written
+    /// on the same line is read again with the rest, word by word along it, and nothing from other lines is.
+    @Test func aCommandWrittenInPiecesIsReadAsOneLine() {
+        let at = CGRect(x: 100, y: 300, width: 36, height: 36)
+        let a = CGRect(x: 158, y: 312, width: 20, height: 20)
+        let below = CGRect(x: 100, y: 420, width: 80, height: 30)       // the next problem down the page
+        let farOff = CGRect(x: 700, y: 305, width: 40, height: 28)      // same height, other side of the page
+        let clock = [CGRect(x: 210, y: 300, width: 128, height: 34)]
+        #expect(InkGeometry.lineMates([at, a, below, farOff], of: clock) == [0, 1])
+        // Word by word: "@" is too far from the last word on its own, but "a clock" carries the line to it.
+        let tail = [CGRect(x: 420, y: 302, width: 90, height: 30)]
+        #expect(InkGeometry.lineMates([at, a, clock[0]], of: tail) == [0, 1, 2])
+        #expect(InkGeometry.lineMates([at], of: []).isEmpty)
+        #expect(!InkGeometry.onSameLine(below, as: clock))
     }
 
     @Test func onlyATapMakesIt() {

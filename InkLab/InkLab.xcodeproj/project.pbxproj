@@ -40,10 +40,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		D0CE00000000000000000201 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		7E6E80682FD3ADB200E7C58C /* InkLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = InkLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E6E80772FD3ADB400E7C58C /* InkLabTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = InkLabTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7E6E80812FD3ADB400E7C58C /* InkLabUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = InkLabUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D0CE00000000000000000201 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */

@@ -1,8 +1,8 @@
 import UIKit
 
-/// What a handwritten "@" command becomes after a writing pause: a small sun capsule beside the writing,
-/// "Make “a clock”". Nothing runs from ink on its own. The student taps the chip to make it; writing on,
-/// or leaving it for a few seconds, lets it go. Transient, like the "Designing" card: not a journal object,
+/// What a handwritten "@" command becomes after a writing pause: a small sun capsule just above the end of
+/// the writing, "Make “a clock”". Nothing runs from ink on its own. The student taps the chip to make it;
+/// writing on, or leaving it for a few seconds, lets it go. Transient, like the "Designing" card: not a journal object,
 /// not saved, and only on the page it was written on.
 final class AtCommandChip: UIView {
     let command: String
@@ -78,15 +78,16 @@ final class AtCommandChip: UIView {
         return min(maxWidth, ceil(text) + 34 + 14)
     }
 
-    /// Where the chips go (content coordinates): stacked beside the writing they came from, or under it
-    /// when there's no room to its right. Never off the page.
+    /// Where the chips go (content coordinates): stacked just above the end of the writing they came from,
+    /// like a tag on it, so the next words written along the line never land on a chip (a stroke that
+    /// starts on one would be lost). Under the writing only when there's no room above. Never off the page.
     static func frames(widths: [CGFloat], near ink: CGRect, canvasWidth: CGFloat) -> [CGRect] {
-        let gap: CGFloat = 8
-        let fitsRight = widths.allSatisfy { ink.maxX + 12 + $0 <= canvasWidth - 8 }
+        let gap: CGFloat = 6
+        let stack = CGFloat(widths.count) * height + CGFloat(max(0, widths.count - 1)) * gap
+        let top = ink.minY - gap - stack >= 8 ? ink.minY - gap - stack : ink.maxY + gap
         return widths.enumerated().map { i, w in
-            let y = (fitsRight ? ink.minY : ink.maxY + gap) + CGFloat(i) * (height + gap)
-            let x = fitsRight ? ink.maxX + 12 : max(8, min(ink.minX, canvasWidth - 8 - w))
-            return CGRect(x: x, y: y, width: w, height: height)
+            let x = min(max(8, ink.maxX - w), max(8, canvasWidth - 8 - w))
+            return CGRect(x: x, y: top + CGFloat(i) * (height + gap), width: w, height: height)
         }
     }
 
