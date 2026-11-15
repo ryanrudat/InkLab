@@ -60,6 +60,10 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
 - **On-device canvas** — drawable in the Simulator (PencilKit, `.anyInput` finger/mouse draw; a
   Settings toggle switches to pencil-draws/finger-navigates on iPad). Object overlay over ink,
   journal-backed undo.
+- **Palm rejection** — once Apple Pencil touches the page (or the iPad's "Only Draw with Apple Pencil" is
+  on), only the Pencil draws, so a resting hand can't start a stroke that stalls the pen. While the Pencil
+  writes, and for 0.75s after it lifts, scrolling and page swipes pause; page swipes take fingers only
+  (`PencilWatcher.swift`). Needs a real-iPad check.
 - **Recognition (READ)** — Apple **Vision** on-device (free/offline fallback) + **Claude vision**
   via the proxy. The Recognize button uses Claude (Apple Vision misreads a handwritten "@" as "a";
   Claude reads it correctly). A "Read as…" review sheet shows the editable transcription + engine chips;

@@ -45,6 +45,14 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private let shapeDwellRadius: CGFloat = 10      // stroke-sample fallback: end-dwell wander tolerance (pt)
     private var insertOffset: CGFloat = 0
     private var allowsFingerDrawing = true
+    /// Palm rejection. Once Apple Pencil is in use only the Pencil draws (see `inputPolicy`), and while it
+    /// writes a resting hand can't scroll or turn the page: the scroll pan and page swipes pause from the
+    /// moment the Pencil lands until shortly after it lifts (the gap between words, or moving to a new line).
+    private let pencilWatcher = PencilWatcher()
+    private var pencilDetected = PencilPresence.detected
+    private var pageSwipes: [UISwipeGestureRecognizer] = []
+    private var handNavigationResume: DispatchWorkItem?
+    private let handNavigationPauseAfterPencil: TimeInterval = 0.75
     /// Bounding box of the most recent lasso, so Recognize can read just that selection (cleared when
     /// new ink is drawn).
     private var lastLassoRect: CGRect?
@@ -164,7 +172,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             ])
         }
         canvasView.delegate = self
-        canvasView.drawingPolicy = allowsFingerDrawing ? .anyInput : .pencilOnly
+        canvasView.drawingPolicy = Self.inputPolicy(fingerDrawing: allowsFingerDrawing, pencilDetected: pencilDetected).drawing
         canvasView.backgroundColor = .clear
         canvasView.isOpaque = false
         overlay.backgroundColor = .clear
@@ -212,13 +220,21 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // viewDidLayoutSubviews. A two-finger horizontal swipe pages (one finger is reserved for ink).
         canvasView.alwaysBounceVertical = true
         canvasView.showsVerticalScrollIndicator = true
-        canvasView.panGestureRecognizer.minimumNumberOfTouches = allowsFingerDrawing ? 2 : 1
+        canvasView.panGestureRecognizer.minimumNumberOfTouches =
+            Self.inputPolicy(fingerDrawing: allowsFingerDrawing, pencilDetected: pencilDetected).scrollTouches
         for dir in [UISwipeGestureRecognizer.Direction.left, .right] {
             let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handlePageSwipe(_:)))
             swipe.direction = dir
             swipe.numberOfTouchesRequired = 2
+            // Fingers only: otherwise the Pencil plus a resting palm count as a two-finger swipe.
+            swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
             view.addGestureRecognizer(swipe)
+            pageSwipes.append(swipe)
         }
+
+        pencilWatcher.onPencilDown = { [weak self] in self?.pencilTouchedDown() }
+        pencilWatcher.onPencilUp = { [weak self] in self?.pencilLifted() }
+        view.addGestureRecognizer(pencilWatcher)
 
         canvasView.tool = PKInkingTool(.pen, color: .label, width: 4)
         overlay.apply(projectionDiff(old: nil, new: store.page), page: store.page)
@@ -349,9 +365,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // Mirror the Eraser tool onto generated widgets: a Pencil should rub out a widget's annotation ink
         // (just like it erases the page) rather than draw red ink on it.
         overlay.setPencilErasesAnnotations(tool == .eraser)
-        if tool != .lasso { canvasView.drawingPolicy = fingerDrawing ? .anyInput : .pencilOnly }
-        // Pencil mode: one finger scrolls. Finger-draw mode: one finger draws, so scrolling needs two.
-        canvasView.panGestureRecognizer.minimumNumberOfTouches = fingerDrawing ? 2 : 1
+        applyInputPolicy()
         // Shape-snapping only applies while drawing (pen/highlighter). If it was just turned off or the
         // tool changed mid-hold, drop any pending arm + timer so a stale arm can't snap a later stroke.
         if !(snapShapesOnHold && (tool == .pen || tool == .highlighter)) {
@@ -370,6 +384,48 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         case .lasso:
             setLasso(true)
         }
+    }
+
+    /// Who draws, and how many fingers scroll. With finger drawing on, a finger draws and two fingers
+    /// scroll, until Apple Pencil is in use: then only the Pencil draws. Otherwise a resting palm starts a
+    /// finger stroke, the Pencil interrupts it, and iPadOS palm rejection cancels the palm's touch, which
+    /// stalls the pen for a moment (the "freeze"). Scrolling keeps the setting's finger count, so with
+    /// finger drawing on a single resting contact can't scroll either.
+    nonisolated static func inputPolicy(fingerDrawing: Bool, pencilDetected: Bool)
+        -> (drawing: PKCanvasViewDrawingPolicy, scrollTouches: Int) {
+        (fingerDrawing && !pencilDetected ? .anyInput : .pencilOnly, fingerDrawing ? 2 : 1)
+    }
+
+    private func applyInputPolicy() {
+        let policy = Self.inputPolicy(fingerDrawing: allowsFingerDrawing, pencilDetected: pencilDetected)
+        if currentTool != .lasso { canvasView.drawingPolicy = policy.drawing }
+        canvasView.panGestureRecognizer.minimumNumberOfTouches = policy.scrollTouches
+    }
+
+    private func pencilTouchedDown() {
+        handNavigationResume?.cancel(); handNavigationResume = nil
+        setHandNavigation(enabled: false)
+    }
+
+    private func pencilLifted() {
+        // The first time a Pencil is seen, switch to Pencil-only drawing now that it's lifted: changing the
+        // policy under a stroke that's just starting could drop that stroke.
+        if !pencilDetected {
+            pencilDetected = true
+            PencilPresence.noteDetected()
+            applyInputPolicy()
+        }
+        handNavigationResume?.cancel()
+        let resume = DispatchWorkItem { [weak self] in self?.setHandNavigation(enabled: true) }
+        handNavigationResume = resume
+        DispatchQueue.main.asyncAfter(deadline: .now() + handNavigationPauseAfterPencil, execute: resume)
+    }
+
+    /// Scrolling and page swipes pause while the Pencil writes. Disabling the pan also cancels a scroll a
+    /// palm already started, and a touch that lands while it's off is never handed to it afterwards.
+    private func setHandNavigation(enabled: Bool) {
+        canvasView.panGestureRecognizer.isEnabled = enabled
+        for swipe in pageSwipes { swipe.isEnabled = enabled }
     }
 
     private func setLasso(_ on: Bool) {
