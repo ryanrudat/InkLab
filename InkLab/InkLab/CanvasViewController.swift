@@ -49,6 +49,12 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     private var atSuggestions: [AtCommandChip] = []
     /// When a suggested command was last made: ink written before then is never read as a command again.
     private var atMadeAt: Date?
+    /// The "@" command still being written, so its next line (read after a pause, with no "@" of its own)
+    /// joins it instead of being lost. Gone once it's made, on undo/redo, erasing or a page switch.
+    private var atDraft: AtDraft?
+    /// A read "@" command waiting for the student to stop writing before its chip appears (see `offerAtCommands`).
+    private var atOfferWait = AtOfferWait()
+    private var atOfferTimer: DispatchWorkItem?
     /// Bounding box of the most recent lasso, so Recognize can read just that selection (cleared when
     /// new ink is drawn).
     private var lastLassoRect: CGRect?
@@ -83,6 +89,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// "Write on the page": the highlighted space where the student's next ink is read as their reply
     /// (one at a time, on the page it was opened on).
     private var tutorWriteZone: (session: UUID, page: UUID, rect: CGRect, view: TutorWriteZoneView)?
+    /// The size each conversation's write-here space was last pulled to, so it opens that size again.
+    private var tutorWriteZoneSizes: [UUID: CGSize] = [:]
 
     // Automatic in-canvas "@" detection: after a writing pause, OCR the NEW strokes; if they read as
     // an "@" command, run it and erase that ink. `consumedStrokeCount` marks how many strokes (from
@@ -212,6 +220,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // the pencil move/pause during a stroke (a separate recognizer won't run simultaneously with it).
         canvasView.drawingGestureRecognizer.addTarget(self, action: #selector(handleShapeHold(_:)))
 
+        // A Pencil hovering over the page is about to write more: an "@" chip waits until it lifts away.
+        view.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(handlePencilHover(_:))))
+
         // Scrollable page: two fingers scroll vertically (one finger still draws); contentSize is set in
         // viewDidLayoutSubviews. A two-finger horizontal swipe pages (one finger is reserved for ink).
         canvasView.alwaysBounceVertical = true
@@ -277,6 +288,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         pendingTutorReplies.removeAll()
         closeTutorWriteZone()
         dismissAtSuggestions(animated: false)
+        atDraft = nil
+        cancelAtOffer()
         for case let placeholder as DesigningPlaceholderView in overlay.subviews {
             placeholder.stop()
             placeholder.removeFromSuperview()
@@ -388,6 +401,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     func performUndo() {
         dismissAtSuggestions()   // the "@" ink it was for may be what's being undone
+        atDraft = nil
+        cancelAtOffer()
         guard let step = undoSteps.popLast() else { return }
         applyHistoryStep(step, redo: false)
         redoSteps.append(step)
@@ -395,6 +410,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
 
     func performRedo() {
         dismissAtSuggestions()
+        atDraft = nil
+        cancelAtOffer()
         guard let step = redoSteps.popLast() else { return }
         applyHistoryStep(step, redo: true)
         undoSteps.append(step)
@@ -600,6 +617,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // the new page (an already-in-flight scan is separately page-guarded in autoScanForCommand).
         pendingAutoScan?.cancel(); pendingAutoScan = nil
         dismissAtSuggestions(animated: false)   // they belong to the page they were written on
+        atDraft = nil
+        cancelAtOffer()
         saveInkData(canvasView.drawing.dataRepresentation(), page: store.pageID)
         savedPages[store.pageID] = PageState(ink: canvasView.drawing, undo: undoSteps, redo: redoSteps,
                                              last: lastDrawing, consumed: consumedStrokeCount)
@@ -832,7 +851,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             let commands = Self.extractAtCommands(read)
             if read.hasPrefix("@"), !commands.isEmpty {
                 let r = input.region
-                self.suggestAtCommands(commands, near: CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: 12, dy: 12), page: page)
+                self.offerAtCommands(commands, near: CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: 12, dy: 12), page: page)
                 return
             }
             if self.tutorWriteZone?.session == sessionID { self.closeTutorWriteZone() }
@@ -862,9 +881,17 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         closeTutorWriteZone()
         let session = provenance.tutor
         let avoid = TutorLayout.obstacles(ink: canvasView.drawing.strokes.map(\.renderBounds), page: store.page, except: nil)
-        let rect = TutorLayout.writeZone(problem: session.problem, avoiding: avoid, canvasWidth: view.bounds.width)
+        // Pulled bigger or smaller earlier in this conversation: it opens at that size again.
+        let rect = TutorLayout.writeZone(problem: session.problem, avoiding: avoid, canvasWidth: view.bounds.width,
+                                         size: tutorWriteZoneSizes[session.id])
         let zoneView = TutorWriteZoneView(frame: rect, caption: session.isUnread ? TutorWriteZoneView.rewriteCaption : TutorWriteZoneView.replyCaption)
         zoneView.onCancel = { [weak self] in self?.closeTutorWriteZone() }
+        zoneView.canvasWidth = view.bounds.width
+        zoneView.onResize = { [weak self, weak zoneView] frame in
+            guard let self, let zoneView, self.tutorWriteZone?.view === zoneView else { return }
+            self.tutorWriteZone?.rect = frame          // the reply is read from wherever it now reaches
+            self.tutorWriteZoneSizes[session.id] = frame.size
+        }
         overlay.addSubview(zoneView)
         tutorWriteZone = (session: session.id, page: store.pageID, rect: rect, view: zoneView)
         // Writing needs a drawing tool, and ink already on the page is not the reply.
@@ -1138,6 +1165,9 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
         // again if the stroke carried on the command). Only a finished stroke: a resting palm the iPad rejects
         // never finishes one, so it can't make the chip vanish.
         if addedStroke || currentTool == .eraser, !atSuggestions.isEmpty { dismissAtSuggestions() }   // rubbing out too
+        if currentTool == .eraser { atDraft = nil; cancelAtOffer() }   // what's being written changed under it
+        // Still writing: a chip waiting to be offered waits on (the next pause's read may change it).
+        if addedStroke, currentTool != .eraser { atOfferWait.lastStroke = Date(); scheduleAtOffer() }
         // Record this handwriting change as ONE back/forward step, interleaved with object ops, so the
         // toolbar undo/redo steps to the exact previous/next thing the user made — ink included.
         recordStep(.ink(before: lastDrawing, after: authoritative))
@@ -1294,6 +1324,7 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             session: SessionContext(isOnline: false, userKind: .adult, cloudAIConsentGranted: false))
         autoScanBusy = true
         let inkBounds = commandInk.bounds
+        let inkStrokes = commandInk.strokes.map(\.renderBounds)
         startTrackedTask { [weak self] in
             guard let self else { return }
             defer {
@@ -1323,9 +1354,20 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
             // and will be re-scanned (and suggested once) when the user returns to it.
             guard self.store.pageID == scanPage else { return }
             self.consumedStrokeCount = firedCount   // examined — never re-scan these strokes (keep the ink)
-            // Nothing runs from ink on its own: each command waits as a chip by the writing.
-            if !commands.isEmpty { self.suggestAtCommands(commands, near: inkBounds, page: scanPage) }
-            else { self.dismissAtSuggestions() }   // wrote on, and it isn't a command: the suggestion goes
+            // Nothing runs from ink on its own: each command waits as a chip by the writing, offered once the
+            // student stops writing. The last one may carry on: a line read after a pause with no "@" of its
+            // own joins it if it's written right on.
+            if !commands.isEmpty {
+                self.atDraft = AtDraft(read: read, ink: inkStrokes, page: scanPage, now: Date())
+                self.offerAtCommands(commands, near: inkBounds, page: scanPage)
+            } else if let draft = self.atDraft, draft.page == scanPage,
+                      let next = draft.continued(by: read, at: inkBounds, now: Date()) {
+                self.atDraft = next
+                self.offerAtCommands([next.command], near: next.extent, page: scanPage)
+            } else {
+                self.dismissAtSuggestions()   // wrote on, and it isn't a command: the suggestion goes
+                self.cancelAtOffer()
+            }
         }
     }
 
@@ -1333,6 +1375,42 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     static let atLineMemory: TimeInterval = 60
 
     // MARK: - "@" suggestions (tap to make)
+
+    /// Offer these commands as chips once the student has stopped writing (`AtOfferWait`): no new stroke for
+    /// about 3 seconds and the Pencil not hovering over the page. A newer read replaces the offer.
+    private func offerAtCommands(_ commands: [String], near ink: CGRect, page: UUID) {
+        atOfferWait.read(AtOfferWait.Offer(commands: commands, near: ink, page: page))
+        scheduleAtOffer()
+    }
+
+    /// (Re)arm the timer for the waiting offer, from the last stroke; nothing while the Pencil hovers.
+    private func scheduleAtOffer() {
+        atOfferTimer?.cancel(); atOfferTimer = nil
+        guard let wait = atOfferWait.wait(now: Date()) else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.atOfferTimer = nil
+            guard let offer = self.atOfferWait.take(now: Date()) else { self.scheduleAtOffer(); return }
+            guard offer.page == self.store.pageID, !self.isDismissing else { return }
+            self.suggestAtCommands(offer.commands, near: offer.near, page: offer.page)
+        }
+        atOfferTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+
+    private func cancelAtOffer() {
+        atOfferWait.cancel()
+        atOfferTimer?.cancel(); atOfferTimer = nil
+    }
+
+    /// A Pencil over the glass (not a trackpad pointer, whose height is 0) holds back an "@" chip; once it
+    /// lifts away the chip can come (straight away if writing stopped long enough ago).
+    @objc private func handlePencilHover(_ g: UIHoverGestureRecognizer) {
+        let hovering = (g.state == .began || g.state == .changed) && g.zOffset > 0
+        guard hovering != atOfferWait.hovering else { return }
+        atOfferWait.hovering = hovering
+        scheduleAtOffer()
+    }
 
     /// Show a "Make “…”" chip by the writing for each command, replacing any still showing. Tapping one
     /// runs it (and clears the rest); writing on, switching pages or waiting lets them go.
@@ -1346,6 +1424,8 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
                 guard let self, let chip else { return }
                 self.dismissAtSuggestions()
                 self.atMadeAt = Date()
+                self.atDraft = nil
+                self.cancelAtOffer()
                 self.runInkCommand(chip.command, onPage: chip.pageID)
             }
             overlay.addSubview(chip)
@@ -1365,21 +1445,10 @@ final class CanvasViewController: UIViewController, PKCanvasViewDelegate {
     /// Pull EVERY "@…" command out of recognized text. Handles multiple per page/line, e.g.
     /// "@a clock\n@a piano" → ["@a clock", "@a piano"] and "notes @balance H2 @molar C6" → the two
     /// commands. A command starts at an "@" that begins a line or follows a space (or "("), so an email
-    /// address in someone's notes ("sam@school.org") is never one, and runs up to the next such "@".
+    /// address in someone's notes ("sam@school.org") is never one, and runs up to the next such "@",
+    /// over the lines after it too: "@a solar system with\nall eight planets" is one command.
     static func extractAtCommands(_ text: String) -> [String] {
-        var commands: [String] = []
-        for rawLine in text.split(whereSeparator: \.isNewline) {
-            let line = Array(rawLine)
-            let starts = line.indices.filter { i in
-                line[i] == "@" && (i == 0 || line[i - 1].isWhitespace || line[i - 1] == "(")
-            }
-            for (k, start) in starts.enumerated() {
-                let end = k + 1 < starts.count ? starts[k + 1] : line.count
-                let command = String(line[start..<end]).trimmingCharacters(in: .whitespaces)
-                if command.count > 1 { commands.append(command) }
-            }
-        }
-        return commands
+        AtCommandText.commandLines(in: text).map(AtCommandText.join)
     }
 
     /// A short on-device read that might be a misread "@" (Apple Vision often reads a handwritten "@"

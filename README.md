@@ -20,7 +20,7 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
 all have working, tested cores. **149 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **85 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+`InkLabKit` umbrella), plus **96 app unit tests + UI tests** (the iPad target), plus a **TypeScript
 backend proxy** (`Server/`, **104 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
 (hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
@@ -66,9 +66,11 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   lasso-region recognition reads just the selected area.
 - **Handwritten `@`, tap to make** — handwrite "@…", pause ~1.5s, and the new strokes are read (Vision
   first; "@-shaped" misreads are re-checked by Claude with AI consent; a pause mid-command is fine, since
-  each pause re-reads the line written in the last minute). Nothing runs on its own: a sun chip appears just
-  above the writing ("✦ Make “a clock”"); tap it to make it, or keep writing and it goes (it also fades
-  after ~12s). An "@" counts only at the start of a line or after a space, so an email
+  each pause re-reads the line written in the last minute). A command can run on over several lines: the next
+  line, written right under it within a minute, joins it even after a pause. Nothing runs on its own: a sun
+  chip appears just above the writing ("✦ Make “a clock”"; a long one shows its start and end, "a solar
+  system … orbiting"). It waits until you've stopped writing: no new stroke for ~3s and the Pencil not
+  hovering over the page. Tap it to make it, or keep writing and it goes (it also fades after ~12s). An "@" counts only at the start of a line or after a space, so an email
   address in your notes never triggers it. Ink is never erased. Settings toggle "Suggest “@” commands
   while you write" (default on); the `@` bar always works.
 - **Deterministic engines (COMPUTE)** via the `@`-command bar: `@balance`, `@molar`, `@units`,
@@ -83,7 +85,8 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
   *different* problem), climbing only when the student asks. Every reply passes an **answer-leak guard**
   twice — numerically on the proxy, exactly with the engine on the device — and falls back to a math-free
   hint rather than ever showing the answer or the corrected step. Reply from the note: **Write on the
-  page** highlights a space under the problem and reads what you write there after a pause (any step you
+  page** highlights a space under the problem and reads what you write there after a pause; pull its
+  bottom edge, right edge or corner to make it bigger or smaller, and it opens at that size again (any step you
   write is checked by the red pen, and a verified fix is passed to the tutor as a correction), and
   **Type** drops a box down inside the note. An unfinished line ("1+3=") gets a nudge to finish it, never "can't
   read". The note shows what it read ("I read: 7+3=", tap to correct it and start over), and a problem
@@ -106,8 +109,9 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
 - **Generative make-real** — `@<anything>` generates a live widget via Claude (`claude-opus-4-8`,
   `max_tokens` 8192 → one pass, no truncation round-trips), rendered in a locked-down sandboxed
   **WKWebView** (CSP `default-src 'none'`, no network, navigation/`window.open` denied). A
-  **"Designing…" animation** holds the widget's spot on the canvas while it generates (only on the page
-  it will land on). The model picks a **card shape** for the content — portrait 360×540, landscape
+  **"Designing…" card** holds the widget's spot on the canvas while it generates (only on the page it will
+  land on): the Home poster's city, striped sun and mesa, passing from day to night and back as the sun sets
+  and rises, with a hazy galaxy turning slowly and craft crossing the sky (still under Reduce Motion). The model picks a **card shape** for the content — portrait 360×540, landscape
   560×360 or square 440×440 — and the card is sized to match; the layout is responsive, so resizing the
   card reflows it. Only the HTML document is kept (any stray preamble / ```` ``` ```` fences are stripped
   on the server *and* in the app), and the CSP is always placed ahead of the widget's own markup. The

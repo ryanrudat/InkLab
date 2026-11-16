@@ -61,12 +61,30 @@ struct DesertHeader: View {
     }
 }
 
-/// Maps the 1500×460 design space into the header: scale by height, anchor right.
+/// Maps the 1500×460 design space into a view: the Home header (scale by height, anchor right) or a card.
 struct DesertFrame {
     var size: CGSize
-    var scale: CGFloat { size.height / 460 }
+    var scale: CGFloat
     /// Horizontal offset of the design origin (positive when the header is wider than the scene).
-    var tx: CGFloat { size.width - 1500 * scale }
+    var tx: CGFloat
+    /// Vertical offset of the design origin (a card taller than the scene shows more sky above it).
+    var ty: CGFloat = 0
+
+    /// The Home header: scaled to its height, anchored to the right edge.
+    init(size: CGSize) {
+        self.size = size
+        scale = size.height / 460
+        tx = size.width - 1500 * scale
+    }
+
+    /// A card: the scene from `fromX` to its right edge across the card's width, with the desert's foot on
+    /// the card's bottom edge and the sky carrying on above it.
+    init(card size: CGSize, fromX: CGFloat) {
+        self.size = size
+        scale = size.width / (1500 - fromX)
+        tx = -fromX * scale
+        ty = size.height - 460 * scale
+    }
 
     /// Header height for a given width: the poster's proportions, kept within a comfortable band.
     static func height(forWidth w: CGFloat) -> CGFloat { min(max(w * 460 / 1500, 160), 330) }
@@ -187,27 +205,46 @@ enum DesertScene {
     // MARK: Layers
 
     static func drawBack(_ ctx: inout GraphicsContext, _ f: DesertFrame, _ p: DesertPalette, lift: CGFloat) {
-        let c = designContext(ctx, f, lift: 0)
-        c.fill(Path(CGRect(x: -4000, y: -200, width: 5600, height: 900)), with: .color(p.sky))
+        drawSky(&ctx, f, p, lift: lift)
+        drawSun(&ctx, f, p, lift: lift)
+        drawFarDunes(&ctx, f, p, lift: lift)
+    }
 
+    /// The sky, and the stars at night.
+    static func drawSky(_ ctx: inout GraphicsContext, _ f: DesertFrame, _ p: DesertPalette, lift: CGFloat) {
+        let c = designContext(ctx, f, lift: 0)
+        c.fill(Path(CGRect(x: -4000, y: -3000, width: 5600, height: 3700)), with: .color(p.sky))
         let far = designContext(ctx, f, lift: lift * 0.4)
         if p.isNight {
             for (x, y, r) in stars { far.fill(circle(x, y, r), with: .color(p.star)) }
         }
-        // Sun (moon at night), its lower part cut away by widening stripes in the sky color.
-        let sun: (x: CGFloat, y: CGFloat, r: CGFloat, cut: CGFloat) = p.isNight ? (1166, 150, 97, 251) : (1158, 162, 127, 268)
-        let stripes: [(CGFloat, CGFloat)] = p.isNight ? [(192, 3), (221, 4), (246, 5)]
-                                                    : [(182, 4), (203, 4), (221, 5), (239, 6), (256, 7)]
+    }
+
+    /// The sun (moon at night), its lower part cut away by widening stripes in the sky color, `drop` design
+    /// units below where it sits on the poster. With `cutOut` the stripes are see-through instead, for a sun
+    /// drawn on its own over something else (the "Designing" card's sky).
+    static func drawSun(_ ctx: inout GraphicsContext, _ f: DesertFrame, _ p: DesertPalette, lift: CGFloat,
+                        drop: CGFloat = 0, cutOut: Bool = false) {
+        let far = designContext(ctx, f, lift: lift * 0.4)
+        let at: (x: CGFloat, y: CGFloat, r: CGFloat, cut: CGFloat) = p.isNight ? (1166, 150, 97, 251) : (1158, 162, 127, 268)
+        let sun = (x: at.x, y: at.y + drop, r: at.r, cut: at.cut + drop)
+        let stripes: [(CGFloat, CGFloat)] = (p.isNight ? [(192, 3), (221, 4), (246, 5)]
+                                                       : [(182, 4), (203, 4), (221, 5), (239, 6), (256, 7)]).map { ($0.0 + drop, $0.1) }
         var disc = far
-        disc.clip(to: Path(CGRect(x: 0, y: -100, width: 1500, height: sun.cut + 100)))
+        disc.clip(to: Path(CGRect(x: 0, y: -3000, width: 1500, height: sun.cut + 3000)))
         disc.fill(circle(sun.x, sun.y, sun.r), with: .linearGradient(
             Gradient(stops: [.init(color: p.sunTop, location: 0), .init(color: p.sunMid, location: 0.55),
                              .init(color: p.sunLow, location: 0.85), .init(color: p.sunBottom, location: 1)]),
             startPoint: CGPoint(x: 0, y: sun.y - sun.r), endPoint: CGPoint(x: 0, y: sun.cut)))
+        var bands = far
+        if cutOut { bands.blendMode = .destinationOut }
         for (y, h) in stripes {
-            far.fill(Path(CGRect(x: sun.x - sun.r - 2, y: y, width: 2 * sun.r + 4, height: h)), with: .color(p.sky))
+            bands.fill(Path(CGRect(x: sun.x - sun.r - 2, y: y, width: 2 * sun.r + 4, height: h)), with: .color(cutOut ? .black : p.sky))
         }
+    }
 
+    /// The two far dune bands the sun sets behind.
+    static func drawFarDunes(_ ctx: inout GraphicsContext, _ f: DesertFrame, _ p: DesertPalette, lift: CGFloat) {
         let dunes = designContext(ctx, f, lift: lift * 0.3)
         dunes.fill(ground([(0, 294), (60, 289), (150, 299), (210, 308), (265, 297), (330, 304), (450, 300), (560, 292),
                            (708, 291), (790, 281), (835, 277), (880, 284), (915, 293), (1000, 300), (1200, 302),
@@ -326,7 +363,7 @@ enum DesertScene {
         c.fill(Path(roundedRect: CGRect(x: x, y: y, width: 4, height: 6), cornerRadius: 1), with: .color(p.windows))
     }
 
-    private static func drawMesa(_ c: inout GraphicsContext, _ p: DesertPalette) {
+    static func drawMesa(_ c: inout GraphicsContext, _ p: DesertPalette) {
         let outline: [(CGFloat, CGFloat)] = [
             (232, 372), (258, 352), (276, 340), (288, 328), (306, 316), (318, 304), (334, 292), (342, 274), (354, 256),
             (365, 238), (372, 220), (378, 202), (385, 184), (391, 166), (402, 148), (424, 132), (444, 121), (462, 116),
@@ -382,8 +419,7 @@ enum DesertScene {
         }
         let top: [(CGFloat, CGFloat)] = [(1500, 352), (1350, 356), (1200, 362), (1050, 372), (940, 381), (840, 391), (760, 400),
                                          (690, 410), (630, 420), (585, 430), (548, 442), (520, 452), (500, 460)]
-        let side: [(CGFloat, CGFloat)] = [(1500, 358), (1350, 362), (1200, 368), (1050, 378), (940, 387), (840, 397), (760, 406),
-                                          (692, 416), (636, 427), (596, 437), (566, 448), (546, 460)]
+        let side = skywaySide
         let bottom: [(CGFloat, CGFloat)] = [(575, 460), (585, 456), (612, 448), (652, 438), (700, 428), (760, 418), (840, 407),
                                             (940, 396), (1050, 387), (1200, 377), (1350, 371), (1500, 368)]
         func band(_ upper: [(CGFloat, CGFloat)]) -> Path {
@@ -400,7 +436,11 @@ enum DesertScene {
         }
     }
 
-    private static let stars: [(CGFloat, CGFloat, CGFloat)] = [
+    /// The skyway's lit side, right to left (where its lights sit).
+    static let skywaySide: [(CGFloat, CGFloat)] = [(1500, 358), (1350, 362), (1200, 368), (1050, 378), (940, 387), (840, 397),
+                                                   (760, 406), (692, 416), (636, 427), (596, 437), (566, 448), (546, 460)]
+
+    static let stars: [(CGFloat, CGFloat, CGFloat)] = [
         (698, 41, 1.6), (372, 59, 1.4), (1386, 65, 1.8), (894, 101, 1.3), (560, 107, 1.5), (1450, 199, 1.6), (652, 209, 1.2),
         (176, 245, 1.4), (260, 28, 1.2), (1300, 140, 1.1), (1470, 40, 1.3), (470, 40, 1.1), (40, 120, 1.2), (-160, 70, 1.4),
         (-320, 180, 1.2), (-480, 50, 1.5),
@@ -409,14 +449,14 @@ enum DesertScene {
     // MARK: Geometry helpers
 
     /// A context that draws in design units, nudged down by `lift` points (parallax: far layers lag the scroll).
-    private static func designContext(_ ctx: GraphicsContext, _ f: DesertFrame, lift: CGFloat) -> GraphicsContext {
+    static func designContext(_ ctx: GraphicsContext, _ f: DesertFrame, lift: CGFloat) -> GraphicsContext {
         var c = ctx
-        c.translateBy(x: f.tx, y: lift)
+        c.translateBy(x: f.tx, y: f.ty + lift)
         c.scaleBy(x: f.scale, y: f.scale)
         return c
     }
 
-    private static func circle(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) -> Path {
+    static func circle(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) -> Path {
         Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r))
     }
 
@@ -448,7 +488,7 @@ enum DesertScene {
 
     /// A dune: a smooth top edge filled down to the bottom. Layers that start at the left edge are extended
     /// flat far to the left, so a header wider than the scene shows more desert instead of a gap.
-    private static func ground(_ pts: [(CGFloat, CGFloat)]) -> Path {
+    static func ground(_ pts: [(CGFloat, CGFloat)]) -> Path {
         var path = smooth(pts)
         path.addLine(to: CGPoint(x: 1500, y: 470))
         if pts[0].0 <= 0 {
@@ -462,7 +502,7 @@ enum DesertScene {
     }
 
     /// Builds a closed path from SVG-like commands in design units.
-    private static func svg(_ build: (inout PathBuilder) -> Void) -> Path {
+    static func svg(_ build: (inout PathBuilder) -> Void) -> Path {
         var b = PathBuilder()
         build(&b)
         b.path.closeSubpath()

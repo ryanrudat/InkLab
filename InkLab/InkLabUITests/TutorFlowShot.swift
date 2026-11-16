@@ -160,8 +160,14 @@ final class TutorFlowShot: XCTestCase {
         XCTAssertTrue(zone.waitForExistence(timeout: 5), "Write on the page didn't highlight a space")
         XCTAssertGreaterThan(zone.frame.minY, 300 + 100, "the write-here space must be under the working, not on it")
         shot("2a-write-here")
+        // Pull its corner: the space grows, and writing in the part it just gained is read as the reply.
+        let before = zone.frame
+        XCTAssertTrue(app.descendants(matching: .any)["tutorWriteResize"].exists, "the write-here space has no corner grip")
+        stroke(app, from: CGPoint(x: before.maxX - 3, y: before.maxY - 3), to: CGPoint(x: before.maxX - 3, y: before.maxY + 157))
+        XCTAssertGreaterThan(zone.frame.height, before.height + 120, "pulling the corner didn't make room")
+        shot("2b-pulled-bigger")
         let z = zone.frame
-        stroke(app, from: CGPoint(x: z.minX + 30, y: z.midY + 10), to: CGPoint(x: z.minX + 130, y: z.midY + 16))
+        stroke(app, from: CGPoint(x: z.minX + 30, y: before.maxY + 100), to: CGPoint(x: z.minX + 130, y: before.maxY + 106))
         XCTAssertTrue(waitLabel(message) { $0 != first && (!self.isMock || $0.contains("Nice fix to line 2")) }, "the written reply was never answered")
         XCTAssertEqual(app.otherElements.matching(identifier: "tutorNote").count, 1, "one note per session, not one card per message")
         if isMock { XCTAssertEqual(message.value as? String, "Marked on your page", "\"line 2\" should light up line 2") }

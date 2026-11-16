@@ -13,6 +13,30 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
   Updated the same day (unfinished lines, Write/Type replies, the dock button): **app 54, packages 149 (InkLabMath 36), proxy 95**.
   Then (what was read, unreadable problems, finished-not-fixed): **app 57, packages 149, proxy 96**, TutorFlowShot 4/4.
 
+### 🌅 The "Designing" card is the Home poster (2026-11-16)
+- **Asked for:** the card was too plain next to the Home header. Keep the dipping sun; add a hazy galaxy turning
+  slowly in the sky and more craft of different kinds; and let it pass from day to night and back.
+- `DesigningPlaceholderView` is now the Home scene framed for a card (`DesertFrame(card:fromX:)`: the platform,
+  city and sun across the card's width, the desert's foot on its bottom edge, sky above). The striped mesa is
+  moved to the card's right edge, in front of the sun. **Day to night and back, every 24 s:** the sun rests high
+  with its stripes showing, then sets behind the dunes as the night poster fades in (navy sky, stars, lit windows,
+  the title in night ink); the moon rises, rests and sets as day fades back, and the sun rises again. Every layer
+  has a day and a night copy, cross-faded on one shared timeline (`DesigningPlaceholderView.Cycle`). A card shown
+  in dark mode starts in the middle of the night. A two-armed spiral galaxy, blurred into a haze, is tilted into a disc and
+  turns once every 150 s. Four craft cross at their own pace: the Home header's craft, a domed saucer with rim
+  lights, a finned rocket with a flickering flame, and a small ringed sphere far off. Lights run along the
+  skyway while it works (sun orange by day, window gold at night); some stars twinkle. The title block echoes
+  Home: "Designing" in Futura Bold over a sun-orange rule, the prompt underneath.
+- Drawn once into images (`DesigningArt`, sharing `DesertScene`'s shapes and palette) and moved with Core
+  Animation, so nothing redraws while it plays; under Reduce Motion it holds still on the app's own appearance. `drawBack` is
+  split into `drawSky`, `drawSun` and `drawFarDunes`; the Home header draws the same as before.
+- **Refined:** the change of light passes through a poster sunset (violet overhead, rose, then gold over the
+  desert) at dusk and again at dawn, instead of a gray mix of day and night; the title switches to night ink with
+  that glow, so it always reads. The galaxy's stars are fine dust (tiny points the tilt can't stretch into
+  dashes) and the disc is a little less flattened. Three dots after "Designing" pulse in turn instead of typed
+  periods (brightness only, so they run under Reduce Motion too). The Home craft gained a tail fin and portholes;
+  the ringed sphere is larger and tilted like a planet. Snapshot-checked through a whole cycle on the simulator.
+
 ### ✦ Handwritten "@" asks first (2026-11-15)
 - A handwritten "@…" command no longer runs on its own. After the writing pause the auto-scan reads it as
   before, then shows an `AtCommandChip` beside the ink ("✦ Make “a clock”", or "Run “@balance …”" for an
@@ -35,6 +59,53 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
     just above the end of the writing so the next words along the line never land on it.
   - The consent-gated cloud re-check also covers a read starting "•", "©" or "*" (up to 40 characters).
     80 app unit tests.
+
+### ✦ An "@" command over several lines stays one (2026-11-16)
+- **Reported:** "if I use the @a… and it's more than one line, it seems to lose the idea". Two causes:
+  `extractAtCommands` split a reading at line breaks, so "@a solar system with" / "all eight planets" read
+  together gave only the first line; and written at a normal pace, the next line was read on its own after
+  a pause (the scan reads new ink plus its own line), had no "@", and was dropped, while its first stroke had
+  already closed the chip.
+- `AtCommandText.commandLines`: lines after an "@" line carry that command on until another "@" starts one
+  (a word split with "-" is joined back; an "@" alone on its line still starts one).
+- `AtDraft` keeps the command being written: the text before the line in progress, that line, where it is,
+  and the whole command's extent. The next scan joins it when its new ink, with no "@" of its own, is on that
+  line (the line is replaced by the fresh re-reading, or added to when only the new words could be read) or
+  on the next line down (within ~1.2 letter heights, under the command). If a re-reading of the "@" line
+  loses its "@", the words already known keep it. The chip then offers the whole command, above all of it.
+  Gone once made, on undo/redo, erasing, a page switch, or after a minute with nothing added. No new cloud
+  reads: the consent-gated re-check is unchanged.
+- The chip shortens a long command in the middle ("Make “a solar system … orbiting”"), so the words from the
+  next line show; VoiceOver reads all of it.
+- Checked on the simulator: "@a red", then "ball" on the line below in a separate pass (read alone as
+  "ball") → one chip "✦ Make “a red ball”". 89 app unit tests.
+
+### ⏳ The "@" chip waits until you've stopped writing (2026-11-16)
+- **Asked:** "the "@a..." while the user is writing, tries to guess": the chip came up 1.5s into a pause,
+  with a command not finished yet.
+- The ink is still read after the 1.5s pause (so the result is ready), but the chip is only shown once no
+  new stroke has come for 3 seconds and the Apple Pencil isn't hovering over the page
+  (`UIHoverGestureRecognizer`, a Pencil's `zOffset` > 0, so a trackpad pointer doesn't count). Lifting the
+  Pencil away lets a waiting chip come at once if writing stopped long enough ago. `AtOfferWait` holds the
+  read offer: any new stroke restarts the wait, the newest read replaces it (so a command written over
+  several lines still ends as one chip, offered once), and writing that isn't a command, erasing, undo/redo,
+  a page switch or making a chip drops it. An "@" written as a tutor reply waits the same way.
+- Checked on the simulator with a timing log: read 1.7–1.9s after the last stroke, shown 3.1s after it,
+  and a command written over two lines came as one chip. Pencil hover can't be tried in the simulator.
+  96 app unit tests, TutorFlowShot 5/5.
+
+### ↘ Pull the reply space bigger or smaller (2026-11-16)
+- **Asked:** make the dashed space for a written reply to &Co adjustable by pulling it.
+- `TutorWriteZoneView` has three grips: a bar on the bottom edge, a bar on the right edge, and the
+  corner's resize mark (the same one the widgets use). Pulling one resizes the space from its top-left
+  corner. It keeps a size worth writing in (at least 200 × 80), never runs past the page's right
+  margin, and is at most 900 tall (`TutorWriteZoneView.resized`). Only the ✕ and the grips take a
+  touch; the Pencil still writes through the rest of the space.
+- The reply is read from wherever the space now reaches (`tutorWriteZone.rect` follows the pull).
+  Reopened in the same conversation, it comes back at the pulled size (`TutorLayout.writeZone(size:)`).
+- VoiceOver: the corner grip is adjustable, one line taller or shorter per swipe.
+- `TutorFlowShot` pulls the corner 160 points down and writes only in the part it gained; that ink is
+  read as the reply. TutorFlowShot 5/5, 94 app unit tests.
 
 ### 🧽 Erased writing is never read (2026-11-15)
 - **Reported:** the tutor read a word that had been rubbed out, with a few lines the eraser hadn't quite got.

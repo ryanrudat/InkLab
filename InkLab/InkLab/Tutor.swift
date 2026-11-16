@@ -555,12 +555,14 @@ enum TutorLayout {
     }
 
     /// Where "Write on the page" asks for the reply: a free strip under the problem (moved down past any
-    /// ink or object in the way), at least `minWidth` wide, inside the page.
+    /// ink or object in the way), at least `minWidth` wide, inside the page. `size`: the size the student
+    /// pulled it to last time in this conversation, if they did.
     static func writeZone(problem: CGRect, avoiding: [CGRect], canvasWidth: CGFloat,
-                          height: CGFloat = TutorNoteStyle.current.writeZoneHeight, minWidth: CGFloat = 300) -> CGRect {
-        let width = min(max(problem.width, minWidth), max(120, canvasWidth - 32))
+                          height: CGFloat = TutorNoteStyle.current.writeZoneHeight, minWidth: CGFloat = 300,
+                          size: CGSize? = nil) -> CGRect {
+        let width = min(size?.width ?? max(problem.width, minWidth), max(120, canvasWidth - 32))
         let x = min(max(16, problem.minX), max(16, canvasWidth - 16 - width))
-        var zone = CGRect(x: x, y: problem.maxY + 12, width: width, height: height)
+        var zone = CGRect(x: x, y: problem.maxY + 12, width: width, height: size?.height ?? height)
         for _ in 0..<40 {
             let hits = avoiding.filter { !$0.isNull && $0.insetBy(dx: -8, dy: -8).intersects(zone) }
             guard let lowest = hits.map(\.maxY).max() else { break }

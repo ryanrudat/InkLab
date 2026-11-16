@@ -528,16 +528,35 @@ final class TutorNoteView: UIView, UITextFieldDelegate {
 }
 
 /// "Write on the page": the highlighted space next to the problem where the student's next ink is read as
-/// their reply. Ink passes straight through it to the canvas; only its ✕ (stop writing) takes a tap.
+/// their reply. Ink passes straight through it to the canvas; only its ✕ (stop writing) and its grips take a
+/// touch. Pull the bottom edge, the right edge or the corner to make it bigger or smaller (a longer answer,
+/// a wider line); the reply is read from wherever it now reaches.
 final class TutorWriteZoneView: UIView {
     var onCancel: (() -> Void)?
+    /// The space was pulled to a new frame (its superview's coordinates): while dragging, and once more at the end.
+    var onResize: ((CGRect) -> Void)?
+    /// How wide the page is; the space never grows past its right margin.
+    var canvasWidth: CGFloat = .greatestFiniteMagnitude
     private let border = CAShapeLayer()
     private let caption = UILabel()
     private let cancel = UIButton(type: .system)
+    private let grips: [Grip] = [Grip(.bottom), Grip(.right), Grip([.right, .bottom])]
+    private var dragStart = CGRect.zero
     private var style: TutorNoteStyle { .current }
 
     static let replyCaption = "Write your reply here. \(TutorSession.tutorName) reads it when you pause."
     static let rewriteCaption = "Write it again here, a little larger. \(TutorSession.tutorName) reads it when you pause."
+    static let minSize = CGSize(width: 200, height: 80)
+    static let maxHeight: CGFloat = 900
+    /// How much one VoiceOver swipe grows or shrinks it (about a line of writing).
+    static let step: CGFloat = 48
+
+    /// Which edges a grip moves.
+    struct Edges: OptionSet {
+        let rawValue: Int
+        static let right = Edges(rawValue: 1)
+        static let bottom = Edges(rawValue: 2)
+    }
 
     init(frame: CGRect, caption text: String = TutorWriteZoneView.replyCaption) {
         super.init(frame: frame)
@@ -552,6 +571,18 @@ final class TutorWriteZoneView: UIView {
         cancel.accessibilityIdentifier = "tutorWriteCancel"
         cancel.addAction(UIAction { [weak self] _ in self?.onCancel?() }, for: .touchUpInside)
         addSubview(cancel)
+        for grip in grips {
+            grip.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(pull(_:))))
+            addSubview(grip)
+        }
+        // VoiceOver: the corner grip is the one control for its size, a line taller or shorter per swipe.
+        let corner = grips[2]
+        corner.isAccessibilityElement = true
+        corner.accessibilityLabel = "Reply space size"
+        corner.accessibilityHint = "Swipe up or down to make room for more or less writing."
+        corner.accessibilityTraits = .adjustable
+        corner.accessibilityIdentifier = "tutorWriteResize"
+        corner.onAdjust = { [weak self] taller in self?.adjust(taller: taller) }
         applyStyle()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -565,6 +596,7 @@ final class TutorWriteZoneView: UIView {
         caption.font = s.threadFont
         caption.textColor = s.writeZoneTint
         cancel.tintColor = s.writeZoneTint.withAlphaComponent(0.7)
+        for grip in grips { grip.tint = s.writeZoneTint }
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
@@ -577,10 +609,87 @@ final class TutorWriteZoneView: UIView {
         border.path = UIBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerRadius: style.cornerRadius).cgPath
         cancel.frame = CGRect(x: bounds.width - 34, y: 4, width: 30, height: 30)
         caption.frame = CGRect(x: 12, y: 8, width: max(0, bounds.width - 52), height: 36)
+        let g = Grip.side
+        grips[0].frame = CGRect(x: bounds.midX - g / 2, y: bounds.maxY - g / 2 - 1, width: g, height: g)
+        grips[1].frame = CGRect(x: bounds.maxX - g / 2 - 1, y: bounds.midY - g / 2, width: g, height: g)
+        grips[2].frame = CGRect(x: bounds.maxX - g / 2 - 3, y: bounds.maxY - g / 2 - 3, width: g, height: g)
     }
 
-    /// Only the ✕ is interactive: the Pencil writes through the rest.
+    /// Only the ✕ and the grips are interactive: the Pencil writes through the rest.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        cancel.frame.insetBy(dx: -6, dy: -6).contains(point) ? cancel : nil
+        if cancel.frame.insetBy(dx: -6, dy: -6).contains(point) { return cancel }
+        return grips.reversed().first { $0.frame.contains(point) }
+    }
+
+    @objc private func pull(_ g: UIPanGestureRecognizer) {
+        guard let grip = g.view as? Grip, let parent = superview else { return }
+        switch g.state {
+        case .began:
+            dragStart = frame
+        case .changed, .ended:
+            frame = Self.resized(dragStart, by: g.translation(in: parent), edges: grip.edges, canvasWidth: canvasWidth)
+            onResize?(frame)
+        default:
+            break
+        }
+    }
+
+    private func adjust(taller: Bool) {
+        frame = Self.resized(frame, by: CGPoint(x: 0, y: taller ? Self.step : -Self.step), edges: .bottom, canvasWidth: canvasWidth)
+        onResize?(frame)
+        UIAccessibility.post(notification: .layoutChanged, argument: nil)
+    }
+
+    /// `start` with the grip's edges pulled by `t`: the top-left corner stays put, it keeps a size worth
+    /// writing in, and it never runs past the page's right margin.
+    static func resized(_ start: CGRect, by t: CGPoint, edges: Edges, canvasWidth: CGFloat) -> CGRect {
+        var r = start
+        if edges.contains(.right) { r.size.width += t.x }
+        if edges.contains(.bottom) { r.size.height += t.y }
+        r.size.width = min(max(minSize.width, r.size.width), max(minSize.width, canvasWidth - 16 - r.minX))
+        r.size.height = min(max(minSize.height, r.size.height), maxHeight)
+        return r
+    }
+
+    /// A grip on the dashed edge: a short sun-colored bar on an edge, or the corner's resize mark. Its touch
+    /// area is larger than what shows, so a finger or the Pencil finds it easily.
+    final class Grip: UIView {
+        static let side: CGFloat = 34
+        let edges: Edges
+        var onAdjust: ((Bool) -> Void)?
+        var tint: UIColor = Theme.sun { didSet { mark.backgroundColor = edges == [.right, .bottom] ? Theme.card : tint
+            mark.layer.borderColor = tint.cgColor; glyph.tintColor = tint } }
+        private let mark = UIView()
+        private let glyph = UIImageView(image: UIImage(systemName: "arrow.up.left.and.arrow.down.right",
+                                                       withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .bold)))
+
+        init(_ edges: Edges) {
+            self.edges = edges
+            super.init(frame: .zero)
+            mark.isUserInteractionEnabled = false
+            mark.layer.cornerCurve = .continuous
+            addSubview(mark)
+            if edges == [.right, .bottom] {
+                mark.layer.borderWidth = 1.5
+                glyph.contentMode = .center
+                mark.addSubview(glyph)
+            }
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let c = CGPoint(x: bounds.midX, y: bounds.midY)
+            switch edges {
+            case .bottom: mark.frame = CGRect(x: c.x - 15, y: c.y - 2.5, width: 30, height: 5)
+            case .right: mark.frame = CGRect(x: c.x - 2.5, y: c.y - 15, width: 5, height: 30)
+            default: mark.frame = CGRect(x: c.x - 10, y: c.y - 10, width: 20, height: 20)
+            }
+            mark.layer.cornerRadius = min(mark.bounds.width, mark.bounds.height) / 2
+            glyph.frame = mark.bounds
+        }
+
+        override func accessibilityIncrement() { onAdjust?(true) }
+        override func accessibilityDecrement() { onAdjust?(false) }
     }
 }
