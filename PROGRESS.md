@@ -125,6 +125,20 @@ Repo: <https://github.com/ryanrudat/InkLab> (public).
   trim (same strokes, same count) looked like no change at all.
 - Checked on the simulator: one eraser pass across "clock" in "@ a clock" left the bottoms of its letters;
   all six pieces were found as leftovers and "@ a" was kept. 85 app unit tests, TutorFlowShot 5/5.
+### ✋ Resting hand froze the pen (2026-11-15)
+Reported on a real iPad: resting a hand on the screen while writing occasionally froze the ink.
+- **Cause:** finger drawing defaults on, so the canvas ran `.anyInput`. A resting palm started a finger
+  stroke, the Pencil interrupted it, and iPadOS palm rejection then cancelled the palm's touch, which
+  cancelled the drawing gesture and stalled input for a moment.
+- **Fix:** a passive `PencilWatcher` (never recognizes, delays or cancels touches) notices Pencil touches.
+  After the first one (remembered in `inklab.pencilDetected.v1`, or assumed when
+  `UIPencilInteraction.prefersPencilOnlyDrawing`), only the Pencil draws (`CanvasViewController.inputPolicy`,
+  unit-tested). Scrolling keeps the setting's finger count: two with finger drawing on. While the Pencil is
+  down and for 0.75s after it lifts, the scroll pan and the two page swipes are disabled. The swipes now
+  take finger touches only, so Pencil + palm can't count as two fingers.
+- **Tradeoff:** on an iPad that has used a Pencil, finger and mouse no longer draw even with the toggle on.
+- ⚠️ **Needs a real-iPad check** (the Simulator has no Pencil): rest a palm and write, then check that
+  two-finger scroll and page swipes still work.
 
 ### 🎓 Socratic tutor (2026-11-12)
 A student lassoes a problem and their own working, taps **Tutor**, and gets hints and questions next to

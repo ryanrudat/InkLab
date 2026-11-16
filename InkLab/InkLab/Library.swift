@@ -132,8 +132,10 @@ struct Notebook: Identifiable, Hashable, Sendable, Codable {
     /// snaps to a clean form. Persisted; on by default.
     @Published var snapShapesOnHold: Bool { didSet { UserDefaults.standard.set(snapShapesOnHold, forKey: Self.snapShapesKey) } }
     @Published var leftHanded: Bool { didSet { UserDefaults.standard.set(leftHanded, forKey: Self.leftHandedKey) } }
-    /// Allow finger/mouse to draw ink. On by default so the canvas works in the Simulator (which has
-    /// no Apple Pencil); turn off on a real iPad for pencil-draws / finger-navigates (ADR 0005).
+    /// Allow finger/mouse to draw ink (two fingers scroll). On by default so the canvas works in the
+    /// Simulator and on an iPad without Apple Pencil. Once a Pencil is used (`PencilPresence`), only the
+    /// Pencil draws even with this on, so a resting palm can't draw or stall the pen; finger and mouse no
+    /// longer draw on that iPad. Off: pencil draws, one finger scrolls (ADR 0005).
     @Published var fingerDrawing: Bool { didSet { UserDefaults.standard.set(fingerDrawing, forKey: Self.fingerDrawingKey) } }
     /// After a writing pause, offer a handwritten "@…" command as a tap-to-make chip beside it (it never
     /// runs on its own). Turn off for distraction-free note-taking. Key unchanged from "auto-run".

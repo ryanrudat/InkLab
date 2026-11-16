@@ -498,6 +498,19 @@ struct InkLabTests {
         return PKStroke(ink: PKInk(.pen, color: .black), path: path)
     }
 
+    /// The "resting my hand freezes the pen" bug: with finger drawing on, a palm started a finger stroke
+    /// that the Pencil interrupted and palm rejection then cancelled. Once a Pencil is seen only it draws,
+    /// and the scroll finger count follows the setting alone (two with finger drawing on).
+    @Test func onlyThePencilDrawsOnceItIsInUse() {
+        let policy = CanvasViewController.inputPolicy
+        #expect(policy(true, false).drawing == .anyInput)      // no Pencil yet (Simulator): fingers draw
+        #expect(policy(true, false).scrollTouches == 2)
+        #expect(policy(true, true).drawing == .pencilOnly)     // Pencil in use: a palm can't start a stroke
+        #expect(policy(true, true).scrollTouches == 2)         // …and one resting contact can't scroll
+        #expect(policy(false, false).drawing == .pencilOnly)   // finger drawing off: unchanged
+        #expect(policy(false, true).scrollTouches == 1)
+    }
+
     /// The reported bug + the cases that broke a naïve suffix/count reconciliation. When PencilKit's async
     /// `.drawing` swap lets a removed stroke reappear, the delegate strips it by EXACT signature — so the
     /// undone ink can't return, while a legitimate eraser edit (which also grows the stroke count, but with

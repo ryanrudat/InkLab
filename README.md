@@ -20,7 +20,7 @@ equation balancing), and **biology** (transcription/translation, mutations, Punn
 **intent router** (`@`-command → deterministic engine / native widget / generative make-real),
 **notebook search** (inverted index over recognized + typed text), and the canvas **geometry core**
 all have working, tested cores. **149 package tests across 12 pure-Swift library packages** (plus the
-`InkLabKit` umbrella), plus **96 app unit tests + UI tests** (the iPad target), plus a **TypeScript
+`InkLabKit` umbrella), plus **97 app unit tests + UI tests** (the iPad target), plus a **TypeScript
 backend proxy** (`Server/`, **104 tests**). New (2026-11-12): a **Socratic tutor** on top of the red pen
 (hints and questions, never the answer; see below). The journal now **persists to disk** (append-only op log +
 ink blobs) and survives relaunch, reopening the last-viewed page.
@@ -60,6 +60,10 @@ survive rotation and split-view. The repo is now **public on GitHub** — see [H
 - **On-device canvas** — drawable in the Simulator (PencilKit, `.anyInput` finger/mouse draw; a
   Settings toggle switches to pencil-draws/finger-navigates on iPad). Object overlay over ink,
   journal-backed undo.
+- **Palm rejection** — once Apple Pencil touches the page (or the iPad's "Only Draw with Apple Pencil" is
+  on), only the Pencil draws, so a resting hand can't start a stroke that stalls the pen. While the Pencil
+  writes, and for 0.75s after it lifts, scrolling and page swipes pause; page swipes take fingers only
+  (`PencilWatcher.swift`). Needs a real-iPad check.
 - **Recognition (READ)** — Apple **Vision** on-device (free/offline fallback) + **Claude vision**
   via the proxy. The Recognize button uses Claude (Apple Vision misreads a handwritten "@" as "a";
   Claude reads it correctly). A "Read as…" review sheet shows the editable transcription + engine chips;

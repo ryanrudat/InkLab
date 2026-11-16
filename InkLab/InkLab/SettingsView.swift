@@ -21,7 +21,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Writing")
                 } footer: {
-                    Text("Finger/mouse drawing: keep on to draw in the Simulator (no Apple Pencil). Suggest “@” commands: when you handwrite something starting with “@” (like “@a clock”) and pause, a button appears beside it — tap it to make it, or keep writing and it goes away. Turn off for distraction-free notes; the “@” bar always works. Snap shapes on hold: draw a line or shape and hold the pencil still for ~½ second to snap it into a clean form.")
+                    Text("Finger/mouse drawing: a finger or mouse draws and two fingers scroll (keep it on to draw in the Simulator, which has no Apple Pencil). Once you write with Apple Pencil, only the Pencil draws, so a hand resting on the screen can’t leave marks or stall the pen; two fingers still scroll. Suggest “@” commands: when you handwrite something starting with “@” (like “@a clock”) and stop writing, a button appears just above it — tap it to make it, or keep writing and it goes away. Turn off for distraction-free notes; the “@” bar always works. Snap shapes on hold: draw a line or shape and hold the pencil still for ~½ second to snap it into a clean form.")
                 }
                 Section {
                     Toggle("Allow AI generation", isOn: $settings.cloudAIConsentGranted)
